@@ -178,27 +178,79 @@ function checkWin(celebrate: boolean): void {
 }
 
 /* ---------- sound ---------- */
+// A little "achievement" jingle: a quick ascending run that lands on a big,
+// ringing major chord, glued with a compressor and a shimmer/echo tail.
 function playWinChime(): void {
   if (muted) return;
   try {
     const Ctx = globalThis.AudioContext ?? (globalThis as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
     if (!Ctx) return;
     const ac = new Ctx();
-    const notes = [523.25, 659.25, 783.99, 1046.5]; // C5 E5 G5 C6
-    notes.forEach((freq, i) => {
+    const now = ac.currentTime;
+
+    // Master bus: compressor keeps the stacked chord punchy without clipping.
+    const comp = ac.createDynamicsCompressor();
+    comp.threshold.value = -14;
+    comp.ratio.value = 12;
+    comp.attack.value = 0.003;
+    comp.release.value = 0.25;
+    comp.connect(ac.destination);
+
+    const master = ac.createGain();
+    master.gain.value = 0.55;
+    master.connect(comp);
+
+    // Feedback delay for a touch of sparkle / space.
+    const delay = ac.createDelay(0.5);
+    delay.delayTime.value = 0.17;
+    const feedback = ac.createGain();
+    feedback.gain.value = 0.3;
+    const echo = ac.createGain();
+    echo.gain.value = 0.22;
+    delay.connect(feedback);
+    feedback.connect(delay);
+    delay.connect(echo);
+    echo.connect(master);
+
+    const voice = (
+      freq: number,
+      start: number,
+      dur: number,
+      peak: number,
+      type: OscillatorType,
+      detune = 0,
+    ): void => {
       const osc = ac.createOscillator();
       const gain = ac.createGain();
-      osc.type = "triangle";
+      osc.type = type;
       osc.frequency.value = freq;
-      const t = ac.currentTime + i * 0.11;
+      osc.detune.value = detune;
+      const t = now + start;
       gain.gain.setValueAtTime(0.0001, t);
-      gain.gain.exponentialRampToValueAtTime(0.22, t + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.32);
-      osc.connect(gain).connect(ac.destination);
+      gain.gain.exponentialRampToValueAtTime(peak, t + 0.012);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      osc.connect(gain);
+      gain.connect(master);
+      gain.connect(delay);
       osc.start(t);
-      osc.stop(t + 0.34);
-    });
-    setTimeout(() => void ac.close(), 900);
+      osc.stop(t + dur + 0.05);
+    };
+
+    // Fast ascending run (C major, pentatonic feel).
+    const run = [523.25, 659.25, 783.99, 1046.5, 1318.51]; // C5 E5 G5 C6 E6
+    run.forEach((f, i) => voice(f, i * 0.06, 0.22, 0.18, "triangle"));
+
+    // Landing chord: layered saw+triangle, slightly detuned for width + ring-out.
+    const chordAt = run.length * 0.06 + 0.02;
+    const chord = [523.25, 659.25, 783.99, 1046.5]; // C major
+    for (const f of chord) {
+      voice(f, chordAt, 1.1, 0.16, "triangle", -7);
+      voice(f, chordAt, 1.1, 0.11, "sawtooth", 6);
+    }
+    // Sparkle on top.
+    voice(1567.98, chordAt + 0.05, 0.9, 0.09, "sine"); // G6
+
+    setTimeout(() => void ac.close(), 2600);
   } catch {
     /* audio not available */
   }
