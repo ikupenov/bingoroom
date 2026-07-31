@@ -465,7 +465,7 @@ function currentHintText(): string {
   if (cfg.pack === "custom" && getCustomWords().length === 0) {
     return "Custom pack is empty — hit Edit Words to add your own.";
   }
-  return "Same link, same card — share it with the squad.";
+  return "";
 }
 
 async function share(): Promise<void> {
