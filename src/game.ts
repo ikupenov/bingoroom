@@ -78,10 +78,13 @@ export interface DecoCounts {
   corners: number;
 }
 
-export const TITLES: readonly string[] = [
-  "SQUAD BINGO", "SQUAD 4 BINGO", "STANDUP BINGO", "MEETING BINGO",
-  "SPRINT BINGO", "SYNC BINGO", "RETRO BINGO",
-];
+// Card title reflects the chosen pack.
+export const PACK_TITLES: Record<PackId, string> = {
+  standup: "STANDUP BINGO",
+  sales: "SALES BINGO",
+  allhands: "ALL-HANDS BINGO",
+  custom: "SQUAD BINGO",
+};
 
 /* ---------- seeded RNG (xmur3 hash -> mulberry32) ---------- */
 function xmur3(str: string): () => number {
@@ -185,7 +188,7 @@ export function buildCard(cfg: CardConfig, counts: DecoCounts): Card {
   const rng = makeRng(`${cfg.pack}|${cfg.size}|${cfg.seed}`);
   const total = cfg.size * cfg.size;
 
-  const title = TITLES[Math.floor(rng() * TITLES.length)]!;
+  const title = PACK_TITLES[cfg.pack];
   const pool = ensureEnough(poolFor(cfg.pack), total);
   const cells = seededShuffle(pool, rng).slice(0, total);
 
