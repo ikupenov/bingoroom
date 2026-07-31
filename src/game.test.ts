@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   buildCard,
+  completedLineCells,
+  completeLines,
   cornerIndices,
-  evaluateGoals,
   findWin,
   freeIndex,
-  goalCells,
+  lineLabel,
   oneAwayCells,
   PACK_TITLES,
   poolFor,
@@ -110,25 +111,30 @@ describe("poolFor", () => {
   });
 });
 
-describe("goals", () => {
+describe("lines & goals", () => {
   it("cornerIndices are the four board corners", () => {
     expect(cornerIndices(3)).toEqual([0, 2, 6, 8]);
     expect(cornerIndices(5)).toEqual([0, 4, 20, 24]);
   });
 
-  it("evaluateGoals detects bingo, double, corners, blackout", () => {
-    expect(evaluateGoals(new Set([0, 1, 2]), 3)).toEqual(new Set(["bingo"]));
-    // top row + left column = two complete lines
-    expect(evaluateGoals(new Set([0, 1, 2, 3, 6]), 3)).toEqual(new Set(["bingo", "double"]));
-    expect(evaluateGoals(new Set([0, 2, 6, 8]), 3)).toEqual(new Set(["corners"]));
-    const all = new Set(Array.from({ length: 9 }, (_, i) => i));
-    expect(evaluateGoals(all, 3)).toEqual(new Set(["bingo", "double", "corners", "blackout"]));
+  it("completeLines counts each finished line (fixes 3rd-line-on-5x5)", () => {
+    expect(completeLines(new Set([0, 1, 2]), 3)).toHaveLength(1);
+    // top row + left column = two lines
+    expect(completeLines(new Set([0, 1, 2, 3, 6]), 3)).toHaveLength(2);
+    // top row of a 5x5
+    expect(completeLines(new Set([0, 1, 2, 3, 4]), 5)).toHaveLength(1);
   });
 
-  it("goalCells returns the earning cells", () => {
-    expect(goalCells("corners", new Set([0, 2, 6, 8]), 3).sort()).toEqual([0, 2, 6, 8]);
-    expect(goalCells("bingo", new Set([3, 4, 5]), 3).sort()).toEqual([3, 4, 5]);
-    expect(goalCells("blackout", new Set(), 3)).toHaveLength(9);
+  it("completedLineCells is the union of finished lines", () => {
+    expect(completedLineCells(new Set([3, 4, 5]), 3).sort((a, b) => a - b)).toEqual([3, 4, 5]);
+    expect(completedLineCells(new Set([0]), 3)).toEqual([]);
+  });
+
+  it("lineLabel escalates with count", () => {
+    expect(lineLabel(1)).toBe("BINGO!");
+    expect(lineLabel(2)).toBe("DOUBLE BINGO!");
+    expect(lineLabel(3)).toBe("TRIPLE BINGO!");
+    expect(lineLabel(6)).toBe("6× BINGO!");
   });
 });
 

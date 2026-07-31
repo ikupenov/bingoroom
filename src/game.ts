@@ -224,20 +224,16 @@ export function findWin(marked: ReadonlySet<number>, size: number): number[] | n
   return winLines(size).find((line) => line.every((i) => marked.has(i))) ?? null;
 }
 
-/* ---------- escalating goals ---------- */
-export type GoalId = "bingo" | "double" | "corners" | "blackout";
-
-// Ordered easiest -> hardest; the last freshly-hit goal is the one to celebrate.
-export const GOAL_ORDER: readonly GoalId[] = ["bingo", "double", "corners", "blackout"];
-export const GOAL_LABELS: Record<GoalId, string> = {
-  bingo: "BINGO!",
-  double: "DOUBLE BINGO!",
-  corners: "FOUR CORNERS!",
-  blackout: "BLACKOUT!",
-};
-
+/* ---------- lines, corners, one-away ---------- */
 export function completeLines(marked: ReadonlySet<number>, size: number): number[][] {
   return winLines(size).filter((line) => line.every((i) => marked.has(i)));
+}
+
+/** Union of all cells belonging to a completed line. */
+export function completedLineCells(marked: ReadonlySet<number>, size: number): number[] {
+  const cells = new Set<number>();
+  for (const line of completeLines(marked, size)) for (const i of line) cells.add(i);
+  return [...cells];
 }
 
 export function cornerIndices(size: number): number[] {
@@ -245,30 +241,10 @@ export function cornerIndices(size: number): number[] {
   return [0, last, size * last, size * size - 1];
 }
 
-/** Which goals the current marks satisfy. */
-export function evaluateGoals(marked: ReadonlySet<number>, size: number): Set<GoalId> {
-  const achieved = new Set<GoalId>();
-  const lines = completeLines(marked, size).length;
-  if (lines >= 1) achieved.add("bingo");
-  if (lines >= 2) achieved.add("double");
-  if (cornerIndices(size).every((i) => marked.has(i))) achieved.add("corners");
-  if (marked.size >= size * size) achieved.add("blackout");
-  return achieved;
-}
-
-/** Cells to pulse for a given goal (the ones that "earned" it). */
-export function goalCells(goal: GoalId, marked: ReadonlySet<number>, size: number): number[] {
-  switch (goal) {
-    case "corners":
-      return cornerIndices(size);
-    case "blackout":
-      return Array.from({ length: size * size }, (_, i) => i);
-    default: {
-      const cells = new Set<number>();
-      for (const line of completeLines(marked, size)) for (const i of line) cells.add(i);
-      return [...cells];
-    }
-  }
+/** Label for the Nth simultaneous / cumulative completed line. */
+export function lineLabel(count: number): string {
+  const names = ["BINGO!", "DOUBLE BINGO!", "TRIPLE BINGO!", "QUAD BINGO!"];
+  return names[count - 1] ?? `${count}× BINGO!`;
 }
 
 /** Unmarked cells that would each complete a line (you're "one away"). */

@@ -8,14 +8,13 @@ import { createVoiceListener } from "./voice";
 import {
   buildCard,
   cardKey,
+  completedLineCells,
   completeLines,
-  evaluateGoals,
+  cornerIndices,
   freeIndex,
   getCustomWords,
-  goalCells,
-  GOAL_LABELS,
-  GOAL_ORDER,
   isPackId,
+  lineLabel,
   loadMarks,
   oneAwayCells,
   randomSeed,
@@ -23,7 +22,6 @@ import {
   setCustomWords,
   type CardConfig,
   type DecoCounts,
-  type GoalId,
   type PackId,
 } from "./game";
 
@@ -84,11 +82,21 @@ const wordsArea = required<HTMLTextAreaElement>("#words-area");
 let cfg: CardConfig = initialConfig();
 let marked = loadMarks(cfg);
 let muted = safeGet("bingo:muted") === "1";
-let achieved = new Set<GoalId>();
 let hotCells = new Set<number>();
 let currentCells: readonly string[] = [];
 let currentFree = -1;
 let toastTimer: ReturnType<typeof setTimeout> | undefined;
+
+// Progress trackers so we only celebrate newly-reached milestones.
+let lineCount = 0;
+let cornersDone = false;
+let blackoutDone = false;
+
+function syncProgress(): void {
+  lineCount = completeLines(marked, cfg.size).length;
+  cornersDone = cornerIndices(cfg.size).every((i) => marked.has(i));
+  blackoutDone = marked.size >= cfg.size * cfg.size;
+}
 
 function initialConfig(): CardConfig {
   const params = new URLSearchParams(location.search);
@@ -158,15 +166,22 @@ function render(): void {
     grid.appendChild(cell);
   });
 
-  // Restore silently — reflect any already-won goals without replaying the show.
-  achieved = evaluateGoals(marked, cfg.size);
+  // Restore silently — reflect any already-won lines without replaying the show.
+  syncProgress();
   refreshWinHighlight();
   refreshHot();
   syncControls();
 }
 
 /* ---------- marking ---------- */
+function dismissToast(): void {
+  clearTimeout(toastTimer);
+  toast.classList.remove("show");
+}
+
 function toggleCell(i: number): void {
+  // A manual tap clears any lingering celebration banner right away.
+  dismissToast();
   setMarked(i, !marked.has(i));
 }
 
@@ -202,19 +217,36 @@ function haptic(ms: number): void {
 }
 
 /* ---------- goals ---------- */
+// Fire on every newly-completed line (BINGO -> DOUBLE -> ...), plus the two
+// special goals. Blackout lingers; everything else flashes briefly.
 function checkGoals(): void {
-  const now = evaluateGoals(marked, cfg.size);
-  const fresh = GOAL_ORDER.filter((g) => now.has(g) && !achieved.has(g));
-  achieved = now;
-  const top = fresh[fresh.length - 1]; // hardest newly-hit goal
-  if (top) celebrateGoal(top);
-}
+  const lines = completeLines(marked, cfg.size).length;
+  const corners = cornerIndices(cfg.size).every((i) => marked.has(i));
+  const blackout = marked.size >= cfg.size * cfg.size;
 
-function celebrateGoal(goal: GoalId): void {
-  toast.textContent = GOAL_LABELS[goal];
-  celebrate(goalCells(goal, marked, cfg.size));
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => toast.classList.remove("show"), 2800);
+  let label: string | null = null;
+  let cells: number[] = [];
+  let hold = 1500;
+
+  if (blackout && !blackoutDone) {
+    label = "BLACKOUT!";
+    cells = Array.from({ length: cfg.size * cfg.size }, (_, i) => i);
+    hold = 3600;
+  } else if (corners && !cornersDone) {
+    label = "FOUR CORNERS!";
+    cells = cornerIndices(cfg.size);
+    hold = 2000;
+  } else if (lines > lineCount) {
+    label = lineLabel(lines);
+    cells = completedLineCells(marked, cfg.size);
+    hold = 1500;
+  }
+
+  lineCount = lines;
+  cornersDone = corners;
+  blackoutDone = blackout;
+
+  if (label) celebrate(cells, label, hold);
 }
 
 function refreshWinHighlight(): void {
@@ -249,11 +281,15 @@ function pulseCells(cells: readonly number[]): void {
 }
 
 // Choreograph fireworks + toast to the jingle's beats (WIN_BEATS / WIN_FINALE).
-function celebrate(cells: readonly number[]): void {
+// The banner appears on the finale beat and holds for `holdMs` before fading.
+function celebrate(cells: readonly number[], label: string, holdMs: number): void {
+  toast.textContent = label;
   if (!muted) playWin();
+  clearTimeout(toastTimer);
 
   if (prefersReducedMotion()) {
     toast.classList.add("show");
+    toastTimer = setTimeout(() => toast.classList.remove("show"), holdMs);
     return;
   }
 
@@ -277,6 +313,8 @@ function celebrate(cells: readonly number[]): void {
     pulseCells(cells);
     finaleFireworks();
   }, WIN_FINALE * 1000);
+
+  toastTimer = setTimeout(() => toast.classList.remove("show"), WIN_FINALE * 1000 + holdMs);
 }
 
 /* ---------- Meeting Mode (voice) ---------- */
