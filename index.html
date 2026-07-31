@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Squad Bingo</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Bungee&family=Poppins:ital,wght@0,700;0,800;1,800&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <main class="stage">
+    <section class="bingo-card" id="card">
+      <header class="banner">
+        <h1 class="banner__title" id="title">SQUAD BINGO</h1>
+      </header>
+
+      <div class="grid" id="grid" aria-label="Bingo card"></div>
+
+      <p class="win-toast" id="toast" role="status" aria-live="polite">BINGO!</p>
+    </section>
+
+    <div class="controls">
+      <button class="btn" id="new-card" type="button">New Card</button>
+      <button class="btn btn--ghost" id="reset" type="button">Clear Marks</button>
+    </div>
+  </main>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
