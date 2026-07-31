@@ -121,6 +121,55 @@ function crash(ac: AudioContext, b: Bus, start: number, dur = 0.8, peak = 0.12):
   src.start(ac.currentTime + start);
 }
 
+function audioContext(): AudioContext | null {
+  const Ctx =
+    globalThis.AudioContext ??
+    (globalThis as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  return Ctx ? new Ctx() : null;
+}
+
+// Quick "stamp / pop" for crossing off a square: a downward pitch blip + tick.
+export function playMark(): void {
+  try {
+    const ac = audioContext();
+    if (!ac) return;
+    const t = ac.currentTime;
+
+    const osc = ac.createOscillator();
+    const g = ac.createGain();
+    osc.type = "triangle";
+    osc.frequency.setValueAtTime(330, t);
+    osc.frequency.exponentialRampToValueAtTime(150, t + 0.09);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.22, t + 0.008);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.13);
+    osc.connect(g);
+    g.connect(ac.destination);
+    osc.start(t);
+    osc.stop(t + 0.15);
+
+    const len = Math.floor(ac.sampleRate * 0.05);
+    const buf = ac.createBuffer(1, len, ac.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3);
+    const src = ac.createBufferSource();
+    src.buffer = buf;
+    const hp = ac.createBiquadFilter();
+    hp.type = "highpass";
+    hp.frequency.value = 2000;
+    const ng = ac.createGain();
+    ng.gain.value = 0.12;
+    src.connect(hp);
+    hp.connect(ng);
+    ng.connect(ac.destination);
+    src.start(t);
+
+    setTimeout(() => void ac.close(), 300);
+  } catch {
+    /* audio not available */
+  }
+}
+
 export function playWin(): void {
   try {
     const Ctx =

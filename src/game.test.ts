@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   buildCard,
+  cornerIndices,
+  evaluateGoals,
   findWin,
   freeIndex,
+  goalCells,
+  oneAwayCells,
   PACK_TITLES,
   poolFor,
   winLines,
@@ -103,5 +107,40 @@ describe("poolFor", () => {
     for (const pack of ["standup", "sales", "allhands"] as const) {
       expect(poolFor(pack).length).toBeGreaterThanOrEqual(25);
     }
+  });
+});
+
+describe("goals", () => {
+  it("cornerIndices are the four board corners", () => {
+    expect(cornerIndices(3)).toEqual([0, 2, 6, 8]);
+    expect(cornerIndices(5)).toEqual([0, 4, 20, 24]);
+  });
+
+  it("evaluateGoals detects bingo, double, corners, blackout", () => {
+    expect(evaluateGoals(new Set([0, 1, 2]), 3)).toEqual(new Set(["bingo"]));
+    // top row + left column = two complete lines
+    expect(evaluateGoals(new Set([0, 1, 2, 3, 6]), 3)).toEqual(new Set(["bingo", "double"]));
+    expect(evaluateGoals(new Set([0, 2, 6, 8]), 3)).toEqual(new Set(["corners"]));
+    const all = new Set(Array.from({ length: 9 }, (_, i) => i));
+    expect(evaluateGoals(all, 3)).toEqual(new Set(["bingo", "double", "corners", "blackout"]));
+  });
+
+  it("goalCells returns the earning cells", () => {
+    expect(goalCells("corners", new Set([0, 2, 6, 8]), 3).sort()).toEqual([0, 2, 6, 8]);
+    expect(goalCells("bingo", new Set([3, 4, 5]), 3).sort()).toEqual([3, 4, 5]);
+    expect(goalCells("blackout", new Set(), 3)).toHaveLength(9);
+  });
+});
+
+describe("oneAwayCells", () => {
+  it("finds the single square that completes a line", () => {
+    // top row missing index 2
+    expect(oneAwayCells(new Set([0, 1]), 3)).toEqual(new Set([2]));
+  });
+  it("is empty when no line is one away", () => {
+    expect(oneAwayCells(new Set([0]), 3).size).toBe(0);
+  });
+  it("does not flag an already-complete line", () => {
+    expect(oneAwayCells(new Set([0, 1, 2]), 3).has(2)).toBe(false);
   });
 });
