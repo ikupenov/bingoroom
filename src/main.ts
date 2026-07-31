@@ -3,7 +3,7 @@
  * ------------------------------------------------------------------------- */
 import "./style.css";
 import { finaleFireworks, firework } from "./fireworks";
-import { playMark, playWin, WIN_BEATS, WIN_FINALE } from "./sound";
+import { playCombo, playMark, playWin, WIN_BEATS, WIN_FINALE } from "./sound";
 import { createVoiceListener } from "./voice";
 import {
   buildCard,
@@ -86,16 +86,25 @@ let hotCells = new Set<number>();
 let currentCells: readonly string[] = [];
 let currentFree = -1;
 let toastTimer: ReturnType<typeof setTimeout> | undefined;
+let showTimer: ReturnType<typeof setTimeout> | undefined;
 
 // Progress trackers so we only celebrate newly-reached milestones.
 let lineCount = 0;
 let cornersDone = false;
 let blackoutDone = false;
 
+// Combo: lines completed in quick succession climb an ascending run.
+let comboStep = 0;
+let lastCelebrateAt = -Infinity;
+const COMBO_WINDOW = 1600;
+const now = (): number => (globalThis.performance?.now() ?? 0);
+
 function syncProgress(): void {
   lineCount = completeLines(marked, cfg.size).length;
   cornersDone = cornerIndices(cfg.size).every((i) => marked.has(i));
   blackoutDone = marked.size >= cfg.size * cfg.size;
+  comboStep = 0;
+  lastCelebrateAt = -Infinity;
 }
 
 function initialConfig(): CardConfig {
@@ -176,6 +185,7 @@ function render(): void {
 /* ---------- marking ---------- */
 function dismissToast(): void {
   clearTimeout(toastTimer);
+  clearTimeout(showTimer);
   toast.classList.remove("show");
 }
 
@@ -218,35 +228,37 @@ function haptic(ms: number): void {
 
 /* ---------- goals ---------- */
 // Fire on every newly-completed line (BINGO -> DOUBLE -> ...), plus the two
-// special goals. Blackout lingers; everything else flashes briefly.
+// special goals. Lines chain as an ascending combo; corners/blackout get the
+// full fanfare payoff.
 function checkGoals(): void {
   const lines = completeLines(marked, cfg.size).length;
   const corners = cornerIndices(cfg.size).every((i) => marked.has(i));
   const blackout = marked.size >= cfg.size * cfg.size;
 
-  let label: string | null = null;
-  let cells: number[] = [];
-  let hold = 1500;
-
-  if (blackout && !blackoutDone) {
-    label = "BLACKOUT!";
-    cells = Array.from({ length: cfg.size * cfg.size }, (_, i) => i);
-    hold = 3600;
-  } else if (corners && !cornersDone) {
-    label = "FOUR CORNERS!";
-    cells = cornerIndices(cfg.size);
-    hold = 2000;
-  } else if (lines > lineCount) {
-    label = lineLabel(lines);
-    cells = completedLineCells(marked, cfg.size);
-    hold = 1500;
-  }
+  const gotLine = lines > lineCount;
+  const gotCorners = corners && !cornersDone;
+  const gotBlackout = blackout && !blackoutDone;
 
   lineCount = lines;
   cornersDone = corners;
   blackoutDone = blackout;
 
-  if (label) celebrate(cells, label, hold);
+  if (gotBlackout) {
+    comboStep = 0;
+    celebrateBig("BLACKOUT!", allCells(), 3600);
+  } else if (gotCorners) {
+    comboStep = 0;
+    celebrateBig("FOUR CORNERS!", cornerIndices(cfg.size), 2000);
+  } else if (gotLine) {
+    const t = now();
+    comboStep = t - lastCelebrateAt < COMBO_WINDOW ? comboStep + 1 : 0;
+    lastCelebrateAt = t;
+    celebrateLine(lineLabel(lines), completedLineCells(marked, cfg.size), comboStep);
+  }
+}
+
+function allCells(): number[] {
+  return Array.from({ length: cfg.size * cfg.size }, (_, i) => i);
 }
 
 function refreshWinHighlight(): void {
@@ -280,16 +292,35 @@ function pulseCells(cells: readonly number[]): void {
   }
 }
 
-// Choreograph fireworks + toast to the jingle's beats (WIN_BEATS / WIN_FINALE).
-// The banner appears on the finale beat and holds for `holdMs` before fading.
-function celebrate(cells: readonly number[], label: string, holdMs: number): void {
+function showToastFor(ms: number): void {
+  clearTimeout(showTimer);
+  clearTimeout(toastTimer);
+  toast.classList.add("show");
+  toastTimer = setTimeout(() => toast.classList.remove("show"), ms);
+}
+
+// A single completed line: instant snappy banner + combo stab + one small burst.
+// Reuses `step` so a fast streak reads as one rising chain rather than a pile-up.
+function celebrateLine(label: string, cells: readonly number[], step: number): void {
+  toast.textContent = label;
+  if (!muted) playCombo(step);
+  showToastFor(1400);
+  if (prefersReducedMotion()) return;
+
+  pulseCells(cells);
+  const r = cardEl.getBoundingClientRect();
+  firework(r.left + r.width / 2, r.top + r.height * 0.32, 26 + step * 8, 7);
+}
+
+// Corners / blackout: full fanfare choreographed to the jingle's beats.
+function celebrateBig(label: string, cells: readonly number[], holdMs: number): void {
   toast.textContent = label;
   if (!muted) playWin();
   clearTimeout(toastTimer);
+  clearTimeout(showTimer);
 
   if (prefersReducedMotion()) {
-    toast.classList.add("show");
-    toastTimer = setTimeout(() => toast.classList.remove("show"), holdMs);
+    showToastFor(holdMs);
     return;
   }
 
@@ -308,12 +339,12 @@ function celebrate(cells: readonly number[], label: string, holdMs: number): voi
     }, t * 1000);
   });
 
-  setTimeout(() => {
+  // Banner slams in on the finale beat, then holds.
+  showTimer = setTimeout(() => {
     toast.classList.add("show");
     pulseCells(cells);
     finaleFireworks();
   }, WIN_FINALE * 1000);
-
   toastTimer = setTimeout(() => toast.classList.remove("show"), WIN_FINALE * 1000 + holdMs);
 }
 
