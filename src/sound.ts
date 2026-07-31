@@ -9,6 +9,8 @@
 
 export const WIN_BEATS = [0, 0.2, 0.4] as const;
 export const WIN_FINALE = 0.62;
+// Roughly how long the full fanfare stays audible (incl. reverb tail).
+export const WIN_DURATION = 2.4;
 
 const C4 = 261.63, E4 = 329.63, G4 = 392, B4 = 493.88;
 const C5 = 523.25, D5 = 587.33, E5 = 659.25, G5 = 783.99, A5 = 880, C6 = 1046.5;
@@ -155,19 +157,18 @@ export function playMark(): void {
   }
 }
 
-/* ---------- combo stab (per line) ---------- */
-// `step` (0-based) climbs a pentatonic scale, so consecutive lines ascend.
+/* ---------- combo accent (per extra line while a fanfare rings) ---------- */
+// `step` (1-based) climbs a pentatonic scale, so successive lines ascend.
+// Layers over the playing fanfare — it does NOT cut it.
 export function playCombo(step: number): void {
   const c = ac();
   if (!c) return;
   try {
-    cutCurrent(c);
     const t = c.currentTime;
 
     const master = c.createGain();
     master.gain.value = 0.9;
     master.connect(c.destination);
-    currentCel = master;
 
     const rev = reverb(c, 1.3, 3);
     const rg = c.createGain();

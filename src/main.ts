@@ -3,7 +3,7 @@
  * ------------------------------------------------------------------------- */
 import "./style.css";
 import { finaleFireworks, firework } from "./fireworks";
-import { playCombo, playMark, playWin, WIN_BEATS, WIN_FINALE } from "./sound";
+import { playCombo, playMark, playWin, WIN_BEATS, WIN_DURATION, WIN_FINALE } from "./sound";
 import { createVoiceListener } from "./voice";
 import {
   buildCard,
@@ -93,18 +93,22 @@ let lineCount = 0;
 let cornersDone = false;
 let blackoutDone = false;
 
-// Combo: lines completed in quick succession climb an ascending run.
+// While a fanfare is still ringing, extra lines layer an ascending accent
+// instead of re-triggering the whole fanfare.
 let comboStep = 0;
-let lastCelebrateAt = -Infinity;
-const COMBO_WINDOW = 1600;
+let fanfareBusyUntil = 0;
 const now = (): number => (globalThis.performance?.now() ?? 0);
+
+function markFanfarePlaying(): void {
+  fanfareBusyUntil = now() + WIN_DURATION * 1000;
+}
 
 function syncProgress(): void {
   lineCount = completeLines(marked, cfg.size).length;
   cornersDone = cornerIndices(cfg.size).every((i) => marked.has(i));
   blackoutDone = marked.size >= cfg.size * cfg.size;
   comboStep = 0;
-  lastCelebrateAt = -Infinity;
+  fanfareBusyUntil = 0;
 }
 
 function initialConfig(): CardConfig {
@@ -245,21 +249,25 @@ function checkGoals(): void {
 
   if (gotBlackout) {
     comboStep = 0;
+    markFanfarePlaying();
     celebrateBig("BLACKOUT!", allCells(), 3600);
   } else if (gotCorners) {
     comboStep = 0;
+    markFanfarePlaying();
     celebrateBig("FOUR CORNERS!", cornerIndices(cfg.size), 2000);
   } else if (gotLine) {
-    const t = now();
-    const chaining = t - lastCelebrateAt < COMBO_WINDOW;
-    comboStep = chaining ? comboStep + 1 : 0;
-    lastCelebrateAt = t;
-
     const label = lineLabel(lines);
     const cells = completedLineCells(marked, cfg.size);
-    // Isolated line: full satisfying fanfare. Rapid follow-ups: light combo stab.
-    if (comboStep === 0) celebrateBig(label, cells, 1600);
-    else celebrateLine(label, cells, comboStep);
+    if (now() < fanfareBusyUntil) {
+      // A fanfare is already ringing — layer a quick ascending accent.
+      comboStep += 1;
+      celebrateLine(label, cells, comboStep);
+    } else {
+      // Nothing playing — give it the full satisfying fanfare.
+      comboStep = 0;
+      markFanfarePlaying();
+      celebrateBig(label, cells, 1600);
+    }
   }
 }
 
