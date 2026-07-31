@@ -77,8 +77,12 @@ export function createVoiceListener(handlers: VoiceHandlers): VoiceListener {
       handlers.onTranscript(text);
     };
     r.onerror = (e) => {
-      // "no-speech" / "aborted" are routine; surface the rest.
-      if (e.error !== "no-speech" && e.error !== "aborted") handlers.onError?.(e.error);
+      // "no-speech" / "aborted" are routine — let onend auto-restart.
+      if (e.error === "no-speech" || e.error === "aborted") return;
+      // Anything else (network, service-not-allowed, not-allowed, audio-capture)
+      // is fatal: stop the retry loop and report it.
+      active = false;
+      handlers.onError?.(e.error);
     };
     r.onend = () => {
       // The engine stops itself after a pause; restart while Meeting Mode is on.
