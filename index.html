@@ -3,7 +3,20 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Squad Bingo</title>
+  <title>Squad Bingo — meeting buzzword bingo</title>
+  <meta name="description" content="Retro meeting buzzword bingo. Generate a random card, cross off the jargon as it flies by, and shout BINGO. Shareable cards for the whole squad." />
+  <meta name="theme-color" content="#8a4fc7" />
+
+  <!-- Social preview -->
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="Squad Bingo — meeting buzzword bingo" />
+  <meta property="og:description" content="Generate a random card, cross off the jargon, shout BINGO. Share the same card with your squad." />
+  <meta property="og:image" content="https://ikupenov.github.io/bingoroom/social.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="/icon-192.png" />
+
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Bungee&family=Poppins:ital,wght@0,700;0,800;1,800&display=swap" rel="stylesheet" />
@@ -17,14 +30,49 @@
 
       <div class="grid" id="grid" aria-label="Bingo card"></div>
 
-      <p class="win-toast" id="toast" role="status" aria-live="polite">BINGO!</p>
+      <p class="win-toast" id="toast" role="status" aria-live="assertive">BINGO!</p>
     </section>
 
-    <div class="controls">
+    <div class="toolbar">
+      <label class="field">
+        <span class="field__label">Pack</span>
+        <select class="select" id="pack" aria-label="Word pack">
+          <option value="standup">Standup</option>
+          <option value="sales">Sales</option>
+          <option value="allhands">All-Hands</option>
+          <option value="custom">Custom</option>
+        </select>
+      </label>
+
+      <label class="field">
+        <span class="field__label">Size</span>
+        <select class="select" id="size" aria-label="Grid size">
+          <option value="3">3 × 3</option>
+          <option value="5">5 × 5</option>
+        </select>
+      </label>
+
       <button class="btn" id="new-card" type="button">New Card</button>
-      <button class="btn btn--ghost" id="reset" type="button">Clear Marks</button>
+      <button class="btn btn--pink" id="share" type="button">Share</button>
+      <button class="btn btn--ghost" id="reset" type="button">Clear</button>
+      <button class="btn btn--soft" id="edit-words" type="button">Edit Words</button>
+      <button class="btn btn--icon" id="mute" type="button" aria-label="Toggle sound" aria-pressed="false">🔊</button>
     </div>
+
+    <p class="hint" id="hint"></p>
   </main>
+
+  <dialog class="words-dialog" id="words-dialog">
+    <form method="dialog" class="words-dialog__form" id="words-form">
+      <h2 class="words-dialog__title">Custom words</h2>
+      <p class="words-dialog__help">One phrase per line. Team names, inside jokes, the usual suspects.</p>
+      <textarea class="words-dialog__area" id="words-area" rows="12" spellcheck="false" placeholder="MAREK&#10;SHIP IT&#10;LET'S TAKE THIS OFFLINE"></textarea>
+      <menu class="words-dialog__actions">
+        <button class="btn btn--ghost" value="cancel" type="submit">Cancel</button>
+        <button class="btn btn--pink" value="save" id="words-save" type="submit">Save &amp; play</button>
+      </menu>
+    </form>
+  </dialog>
 
   <script type="module" src="/src/main.ts"></script>
 </body>
