@@ -251,9 +251,15 @@ function checkGoals(): void {
     celebrateBig("FOUR CORNERS!", cornerIndices(cfg.size), 2000);
   } else if (gotLine) {
     const t = now();
-    comboStep = t - lastCelebrateAt < COMBO_WINDOW ? comboStep + 1 : 0;
+    const chaining = t - lastCelebrateAt < COMBO_WINDOW;
+    comboStep = chaining ? comboStep + 1 : 0;
     lastCelebrateAt = t;
-    celebrateLine(lineLabel(lines), completedLineCells(marked, cfg.size), comboStep);
+
+    const label = lineLabel(lines);
+    const cells = completedLineCells(marked, cfg.size);
+    // Isolated line: full satisfying fanfare. Rapid follow-ups: light combo stab.
+    if (comboStep === 0) celebrateBig(label, cells, 1600);
+    else celebrateLine(label, cells, comboStep);
   }
 }
 
