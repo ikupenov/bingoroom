@@ -115,10 +115,11 @@ body {
 
 /* ---------- Grid ---------- */
 .grid {
+  --size: 3;
   position: relative;
   z-index: 2;
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(var(--size), 1fr);
   gap: 0;
   border: 4px solid var(--ink);
   background: var(--ink);
@@ -154,6 +155,19 @@ body {
   color: var(--ink);
   letter-spacing: 0.5px;
 }
+
+/* ---------- 5x5 board: tighter cells ---------- */
+.grid--lg .cell { aspect-ratio: 1 / 0.92; padding: 18px 5px 6px; }
+.grid--lg .cell__phrase { font-size: clamp(8px, 1.7vw, 13px); letter-spacing: 0.2px; }
+.grid--lg .cell__badge { width: 20px; height: 20px; font-size: 9px; top: 4px; left: 4px; }
+.grid--lg .cell__deco { transform-origin: center; scale: 0.72; }
+
+/* ---------- FREE space ---------- */
+.cell--free { background: var(--yellow); cursor: default; }
+.cell--free:hover { background: var(--yellow); }
+.cell--free .cell__phrase { color: var(--purple-dark); }
+.cell--free .cell__cross { display: none; }
+.cell--free .cell__badge { background: var(--pink); }
 
 /* number badge */
 .cell__badge {
@@ -243,33 +257,121 @@ body {
   100% { transform: scale(1) rotate(0); opacity: 1; }
 }
 
-/* ---------- Controls ---------- */
-.controls {
+/* ---------- Toolbar ---------- */
+.toolbar {
   display: flex;
-  gap: 14px;
+  gap: 12px;
   flex-wrap: wrap;
+  align-items: flex-end;
   justify-content: center;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.field__label {
+  font-family: "Bungee", sans-serif;
+  font-size: 11px;
+  letter-spacing: 1px;
+  color: var(--yellow);
+  text-transform: uppercase;
+  padding-left: 4px;
+}
+
+.select {
+  font-family: "Bungee", sans-serif;
+  font-size: 14px;
+  color: var(--ink);
+  background: var(--cream);
+  border: 4px solid var(--ink);
+  border-radius: 8px;
+  padding: 11px 14px;
+  cursor: pointer;
+  box-shadow: 5px 5px 0 rgba(0, 0, 0, 0.35);
+  appearance: none;
 }
 
 .btn {
   font-family: "Bungee", sans-serif;
-  font-size: 16px;
+  font-size: 15px;
   letter-spacing: 1px;
   color: var(--ink);
   background: var(--yellow);
   border: 4px solid var(--ink);
   border-radius: 8px;
-  padding: 12px 26px;
+  padding: 12px 22px;
   cursor: pointer;
   box-shadow: 5px 5px 0 rgba(0, 0, 0, 0.35);
   transition: transform 0.08s ease, box-shadow 0.08s ease;
 }
 .btn:hover { transform: translate(-1px, -1px); box-shadow: 6px 6px 0 rgba(0,0,0,0.35); }
 .btn:active { transform: translate(3px, 3px); box-shadow: 2px 2px 0 rgba(0,0,0,0.35); }
-.btn--ghost { background: var(--teal); color: var(--ink); }
+.btn--ghost { background: var(--teal); }
+.btn--pink { background: var(--pink); color: var(--cream); }
+.btn--soft { background: var(--cream); }
+.btn--icon { padding: 12px 16px; font-size: 18px; }
+
+/* ---------- Hint line ---------- */
+.hint {
+  margin: 0;
+  min-height: 1.2em;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 700;
+  color: rgba(243, 234, 208, 0.75);
+  transition: color 0.2s ease;
+}
+.hint--flash { color: var(--yellow); }
+
+/* ---------- Custom words dialog ---------- */
+.words-dialog {
+  border: 6px solid var(--ink);
+  border-radius: 12px;
+  background: var(--cream);
+  padding: 0;
+  max-width: 440px;
+  width: calc(100% - 32px);
+  box-shadow: 12px 12px 0 rgba(0, 0, 0, 0.4);
+}
+.words-dialog::backdrop { background: rgba(43, 36, 64, 0.6); }
+.words-dialog__form { padding: 22px; display: flex; flex-direction: column; gap: 12px; }
+.words-dialog__title {
+  margin: 0;
+  font-family: "Bungee", sans-serif;
+  font-size: 22px;
+  color: var(--purple-dark);
+}
+.words-dialog__help { margin: 0; font-size: 13px; font-weight: 700; color: var(--ink); opacity: 0.7; }
+.words-dialog__area {
+  font-family: "Poppins", monospace;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink);
+  background: #fff;
+  border: 3px solid var(--ink);
+  border-radius: 8px;
+  padding: 10px;
+  resize: vertical;
+  text-transform: uppercase;
+}
+.words-dialog__actions {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+  margin: 4px 0 0;
+  padding: 0;
+}
 
 @media (max-width: 480px) {
   .bingo-card { padding: 16px; }
   .cell { padding: 22px 6px 8px; }
   .cell__badge { width: 22px; height: 22px; font-size: 10px; }
+  .btn { padding: 11px 16px; font-size: 14px; }
+}
+
+/* ---------- Reduced motion ---------- */
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
 }
