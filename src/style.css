@@ -1,0 +1,275 @@
+:root {
+  --cream: #f3ead0;
+  --cream-deep: #ece0bd;
+  --ink: #1a1714;
+  --purple: #8a4fc7;
+  --purple-dark: #6a2fa8;
+  --yellow: #ffd23f;
+  --blue: #3b5bdb;
+  --pink: #ff2e93;
+  --teal: #14c4a6;
+  --orange: #ff8c1a;
+  --red: #f24236;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  font-family: "Poppins", system-ui, sans-serif;
+  background:
+    radial-gradient(circle at 15% 20%, rgba(255, 46, 147, 0.10), transparent 42%),
+    radial-gradient(circle at 85% 75%, rgba(20, 196, 166, 0.12), transparent 45%),
+    #2b2440;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  padding: 32px 16px 48px;
+}
+
+/* ---------- Card frame ---------- */
+.stage {
+  width: min(760px, 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 22px;
+}
+
+.bingo-card {
+  position: relative;
+  width: 100%;
+  background: var(--cream);
+  border: 6px solid var(--ink);
+  border-radius: 10px;
+  padding: 22px;
+  box-shadow: 12px 12px 0 rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+}
+
+/* dotted inner border */
+.bingo-card::before {
+  content: "";
+  position: absolute;
+  inset: 10px;
+  border: 3px dotted var(--purple);
+  border-radius: 6px;
+  pointer-events: none;
+  z-index: 3;
+}
+
+/* faint confetti wash behind the grid */
+.bingo-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image:
+    radial-gradient(var(--pink) 2px, transparent 3px),
+    radial-gradient(var(--teal) 2px, transparent 3px),
+    radial-gradient(var(--blue) 2px, transparent 3px);
+  background-size: 90px 90px, 130px 130px, 160px 160px;
+  background-position: 0 0, 40px 60px, 90px 20px;
+  opacity: 0.12;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ---------- Banner ---------- */
+.banner {
+  position: relative;
+  z-index: 4;
+  margin: 6px 6px 20px;
+  padding: 14px 18px;
+  background: var(--purple);
+  color: var(--yellow);
+  /* zigzag top & bottom edges */
+  clip-path: polygon(
+    0% 18%, 4% 0%, 8% 18%, 12% 0%, 16% 18%, 20% 0%, 24% 18%, 28% 0%, 32% 18%,
+    36% 0%, 40% 18%, 44% 0%, 48% 18%, 52% 0%, 56% 18%, 60% 0%, 64% 18%, 68% 0%,
+    72% 18%, 76% 0%, 80% 18%, 84% 0%, 88% 18%, 92% 0%, 96% 18%, 100% 0%,
+    100% 82%, 96% 100%, 92% 82%, 88% 100%, 84% 82%, 80% 100%, 76% 82%, 72% 100%,
+    68% 82%, 64% 100%, 60% 82%, 56% 100%, 52% 82%, 48% 100%, 44% 82%, 40% 100%,
+    36% 82%, 32% 100%, 28% 82%, 24% 100%, 20% 82%, 16% 100%, 12% 82%, 8% 100%,
+    4% 82%, 0% 100%
+  );
+}
+
+.banner__title {
+  margin: 0;
+  text-align: center;
+  font-family: "Bungee", sans-serif;
+  font-size: clamp(28px, 6.5vw, 52px);
+  letter-spacing: 1px;
+  line-height: 1;
+  color: var(--yellow);
+  text-shadow:
+    3px 3px 0 var(--ink),
+    -1px -1px 0 var(--red);
+}
+
+/* ---------- Grid ---------- */
+.grid {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0;
+  border: 4px solid var(--ink);
+  background: var(--ink);
+}
+
+.cell {
+  position: relative;
+  aspect-ratio: 1 / 0.82;
+  border: 2px solid var(--ink);
+  background: var(--cream);
+  cursor: pointer;
+  font-family: "Poppins", sans-serif;
+  font-weight: 800;
+  padding: 26px 10px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  overflow: hidden;
+  transition: background 0.12s ease, transform 0.08s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.cell:hover { background: var(--cream-deep); }
+.cell:active { transform: scale(0.98); }
+
+.cell__phrase {
+  position: relative;
+  z-index: 2;
+  font-size: clamp(11px, 2.6vw, 18px);
+  line-height: 1.05;
+  text-transform: uppercase;
+  color: var(--ink);
+  letter-spacing: 0.5px;
+}
+
+/* number badge */
+.cell__badge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 3;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  background: var(--blue);
+  color: var(--yellow);
+  border: 2px solid var(--ink);
+  border-radius: 50%;
+  font-family: "Bungee", sans-serif;
+  font-size: 12px;
+  transform: rotate(-8deg);
+}
+
+/* Memphis decoration layer (injected SVG) */
+.cell__deco {
+  position: absolute;
+  z-index: 1;
+  pointer-events: none;
+}
+
+/* ---------- Cross-off X ---------- */
+.cell__cross {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+  opacity: 0;
+  transform: scale(0.4) rotate(-12deg);
+  transition: opacity 0.14s ease, transform 0.18s cubic-bezier(0.3, 1.6, 0.5, 1);
+}
+
+.cell.marked .cell__cross {
+  opacity: 1;
+  transform: scale(1) rotate(0deg);
+}
+
+.cell.marked .cell__phrase { opacity: 0.85; }
+
+.cell__cross line {
+  stroke: var(--pink);
+  stroke-width: 9;
+  stroke-linecap: round;
+}
+
+/* highlight a winning line */
+.cell.win {
+  background: #fff3c4;
+  animation: pop 0.4s ease;
+}
+@keyframes pop {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.06); }
+  100% { transform: scale(1); }
+}
+
+/* ---------- Win toast ---------- */
+.win-toast {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  margin: 0;
+  display: none;
+  place-items: center;
+  align-content: center;
+  text-align: center;
+  font-family: "Bungee", sans-serif;
+  font-size: clamp(48px, 14vw, 120px);
+  color: var(--pink);
+  background: rgba(243, 234, 208, 0.82);
+  text-shadow: 4px 4px 0 var(--ink), -2px -2px 0 var(--yellow);
+  letter-spacing: 2px;
+  pointer-events: none;
+}
+.win-toast.show {
+  display: grid;
+  animation: bingoIn 0.5s cubic-bezier(0.3, 1.7, 0.5, 1);
+}
+@keyframes bingoIn {
+  0% { transform: scale(0.3) rotate(-15deg); opacity: 0; }
+  100% { transform: scale(1) rotate(0); opacity: 1; }
+}
+
+/* ---------- Controls ---------- */
+.controls {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.btn {
+  font-family: "Bungee", sans-serif;
+  font-size: 16px;
+  letter-spacing: 1px;
+  color: var(--ink);
+  background: var(--yellow);
+  border: 4px solid var(--ink);
+  border-radius: 8px;
+  padding: 12px 26px;
+  cursor: pointer;
+  box-shadow: 5px 5px 0 rgba(0, 0, 0, 0.35);
+  transition: transform 0.08s ease, box-shadow 0.08s ease;
+}
+.btn:hover { transform: translate(-1px, -1px); box-shadow: 6px 6px 0 rgba(0,0,0,0.35); }
+.btn:active { transform: translate(3px, 3px); box-shadow: 2px 2px 0 rgba(0,0,0,0.35); }
+.btn--ghost { background: var(--teal); color: var(--ink); }
+
+@media (max-width: 480px) {
+  .bingo-card { padding: 16px; }
+  .cell { padding: 22px 6px 8px; }
+  .cell__badge { width: 22px; height: 22px; font-size: 10px; }
+}
