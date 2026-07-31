@@ -53,7 +53,8 @@ async function load(): Promise<void> {
         }
       },
     });
-    self.postMessage({ type: "ready" });
+    console.info(`[whisper] ${MODEL} ready on ${device}`);
+    self.postMessage({ type: "ready", device });
   } catch (err) {
     self.postMessage({ type: "error", error: String(err) });
   } finally {

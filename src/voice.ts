@@ -2,9 +2,10 @@
  * Meeting Mode — on-device speech, works in every browser (incl. Dia).
  *
  * The whisper model (~40MB) is downloaded lazily the first time the user turns
- * Meeting Mode on, with progress reported for a UI bar. Audio is captured in
- * ~3s windows, resampled to 16kHz, and transcribed in a Web Worker; the text
- * is streamed back so the caller can auto-mark spoken buzzwords.
+ * Meeting Mode on, with progress reported for a UI bar. Audio is segmented by
+ * voice activity (accumulate while speaking, transcribe on a pause), resampled
+ * to 16kHz, and transcribed in a Web Worker; the text is streamed back so the
+ * caller can auto-mark spoken buzzwords.
  * ------------------------------------------------------------------------- */
 
 export interface VoiceCallbacks {
@@ -22,16 +23,23 @@ export interface MeetingVoice {
 }
 
 const TARGET_RATE = 16000;
-const WINDOW_SEC = 3; // length of audio sent per transcription
-const HOP_MS = 1000; // how often we transcribe -> heavy overlap, so no word falls between windows
-const MAX_BUFFER_SEC = 6; // rolling audio kept in memory
-const SILENCE_RMS = 0.006; // skip near-silent windows (saves the worker for real speech)
+// Voice-activity segmentation: accumulate while you speak, transcribe the whole
+// phrase when you pause. Whisper is far more accurate on complete utterances
+// than on arbitrary fixed-length slices.
+const SPEECH_ENTER_RMS = 0.006; // level that starts an utterance
+const SPEECH_EXIT_RMS = 0.0035; // below this counts as silence (hysteresis)
+const SILENCE_HANG_MS = 600; // trailing silence that ends an utterance
+const MIN_SEG_MS = 250; // ignore blips shorter than this
+const MAX_SEG_MS = 10000; // force a cut for long monologues
+const PREROLL_MS = 250; // audio kept before onset so the first word isn't clipped
+const FRAME_SIZE = 2048; // ~128ms at 16kHz -> fine-grained VAD
 
 interface WorkerMessage {
   type: "progress" | "ready" | "result" | "error";
   pct?: number;
   text?: string;
   error?: string;
+  device?: string;
 }
 
 export function createMeetingVoice(cb: VoiceCallbacks): MeetingVoice {
@@ -47,10 +55,16 @@ export function createMeetingVoice(cb: VoiceCallbacks): MeetingVoice {
   let audioCtx: AudioContext | null = null;
   let source: MediaStreamAudioSourceNode | null = null;
   let processor: ScriptProcessorNode | null = null;
-  let hopTimer: ReturnType<typeof setInterval> | undefined;
-  let chunks: Float32Array[] = []; // rolling buffer of the last MAX_BUFFER_SEC
-  let chunkLen = 0;
   let busy = false;
+  const queue: Float32Array[] = []; // utterances waiting for the worker
+
+  // VAD state
+  let speaking = false;
+  let seg: Float32Array[] = [];
+  let segLen = 0;
+  let silenceSamples = 0;
+  let preroll: Float32Array[] = [];
+  let prerollLen = 0;
 
   function ensureWorker(): void {
     if (worker) return;
@@ -64,13 +78,18 @@ export function createMeetingVoice(cb: VoiceCallbacks): MeetingVoice {
         case "ready":
           modelReady = true;
           loadingModel = false;
+          console.info(`[voice] Meeting Mode ready (${m.device ?? "?"})`);
           cb.onLoadingChange(false);
           readyResolve?.();
           readyResolve = readyReject = null;
           break;
         case "result":
           busy = false;
-          if (m.text && m.text.trim()) cb.onTranscript(m.text);
+          if (m.text && m.text.trim()) {
+            console.debug("[voice] heard:", JSON.stringify(m.text.trim()));
+            cb.onTranscript(m.text);
+          }
+          pump();
           break;
         case "error":
           busy = false;
@@ -81,6 +100,7 @@ export function createMeetingVoice(cb: VoiceCallbacks): MeetingVoice {
             readyResolve = readyReject = null;
           }
           cb.onError(m.error ?? "error");
+          pump();
           break;
       }
     };
@@ -100,19 +120,14 @@ export function createMeetingVoice(cb: VoiceCallbacks): MeetingVoice {
     });
   }
 
-  function flattenAll(): Float32Array {
-    const out = new Float32Array(chunkLen);
+  function flatten(parts: Float32Array[], length: number): Float32Array {
+    const out = new Float32Array(length);
     let off = 0;
-    for (const c of chunks) {
+    for (const c of parts) {
       out.set(c, off);
       off += c.length;
     }
     return out;
-  }
-
-  function lastWindow(samples: number): Float32Array {
-    const all = flattenAll();
-    return all.length <= samples ? all : all.slice(all.length - samples);
   }
 
   function rms(data: Float32Array): number {
@@ -136,6 +151,30 @@ export function createMeetingVoice(cb: VoiceCallbacks): MeetingVoice {
     return out;
   }
 
+  // Send the next queued utterance if the worker is free.
+  function pump(): void {
+    if (busy || !worker || queue.length === 0) return;
+    const audio = queue.shift()!;
+    busy = true;
+    worker.postMessage({ type: "transcribe", audio }, [audio.buffer]);
+  }
+
+  function enqueue(utterance: Float32Array, rate: number): void {
+    const audio = resample(utterance, rate);
+    queue.push(audio);
+    while (queue.length > 3) queue.shift(); // bound backlog
+    pump();
+  }
+
+  function resetVad(): void {
+    speaking = false;
+    seg = [];
+    segLen = 0;
+    silenceSamples = 0;
+    preroll = [];
+    prerollLen = 0;
+  }
+
   async function startListening(): Promise<void> {
     try {
       await ensureModel();
@@ -153,32 +192,48 @@ export function createMeetingVoice(cb: VoiceCallbacks): MeetingVoice {
 
     audioCtx = new AudioContext({ sampleRate: TARGET_RATE });
     const rate = audioCtx.sampleRate;
-    const windowSamples = rate * WINDOW_SEC;
-    const maxSamples = rate * MAX_BUFFER_SEC;
+    const hangSamples = (SILENCE_HANG_MS / 1000) * rate;
+    const minSegSamples = (MIN_SEG_MS / 1000) * rate;
+    const maxSegSamples = (MAX_SEG_MS / 1000) * rate;
+    const prerollSamples = (PREROLL_MS / 1000) * rate;
     source = audioCtx.createMediaStreamSource(stream);
-    processor = audioCtx.createScriptProcessor(4096, 1, 1);
-    chunks = [];
-    chunkLen = 0;
+    processor = audioCtx.createScriptProcessor(FRAME_SIZE, 1, 1);
+    resetVad();
 
-    // Keep a rolling buffer of recent audio; never throw samples away here.
     processor.onaudioprocess = (e: AudioProcessingEvent) => {
-      chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
-      chunkLen += chunks[chunks.length - 1]!.length;
-      while (chunkLen > maxSamples && chunks.length > 1) {
-        chunkLen -= chunks.shift()!.length;
+      const frame = new Float32Array(e.inputBuffer.getChannelData(0));
+      const level = rms(frame);
+
+      if (!speaking) {
+        preroll.push(frame);
+        prerollLen += frame.length;
+        while (prerollLen > prerollSamples && preroll.length > 1) {
+          prerollLen -= preroll.shift()!.length;
+        }
+        if (level >= SPEECH_ENTER_RMS) {
+          speaking = true;
+          seg = preroll.slice();
+          segLen = prerollLen;
+          preroll = [];
+          prerollLen = 0;
+          silenceSamples = 0;
+        }
+        return;
+      }
+
+      // Speaking: accumulate until a pause (or the hard cap).
+      seg.push(frame);
+      segLen += frame.length;
+      if (level >= SPEECH_EXIT_RMS) silenceSamples = 0;
+      else silenceSamples += frame.length;
+
+      if (silenceSamples >= hangSamples || segLen >= maxSegSamples) {
+        const utterance = flatten(seg, segLen);
+        const enough = segLen >= minSegSamples;
+        resetVad();
+        if (enough) enqueue(utterance, rate);
       }
     };
-
-    // Every HOP, transcribe the most recent WINDOW. Overlapping windows mean a
-    // word lands inside several transcriptions, so boundaries don't drop it.
-    hopTimer = setInterval(() => {
-      if (busy || !worker || chunkLen < windowSamples) return;
-      const win = lastWindow(windowSamples);
-      if (rms(win) < SILENCE_RMS) return;
-      const audio = resample(win, rate);
-      busy = true;
-      worker.postMessage({ type: "transcribe", audio }, [audio.buffer]);
-    }, HOP_MS);
 
     source.connect(processor);
     processor.connect(audioCtx.destination);
@@ -188,8 +243,6 @@ export function createMeetingVoice(cb: VoiceCallbacks): MeetingVoice {
 
   function stopListening(): void {
     listeningNow = false;
-    clearInterval(hopTimer);
-    hopTimer = undefined;
     try {
       processor?.disconnect();
       source?.disconnect();
@@ -202,8 +255,8 @@ export function createMeetingVoice(cb: VoiceCallbacks): MeetingVoice {
     stream = null;
     void audioCtx?.close().catch(() => {});
     audioCtx = null;
-    chunks = [];
-    chunkLen = 0;
+    queue.length = 0;
+    resetVad();
     busy = false;
     cb.onListening(false);
   }
