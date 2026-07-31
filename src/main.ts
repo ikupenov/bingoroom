@@ -1,17 +1,22 @@
 /* ---------------------------------------------------------------------------
- * Squad Bingo — DOM wiring, rendering, sound, sharing.
+ * Squad Bingo — DOM wiring, rendering, sound, sharing, Meeting Mode.
  * ------------------------------------------------------------------------- */
 import "./style.css";
 import { finaleFireworks, firework } from "./fireworks";
-import { playWin, WIN_BEATS, WIN_FINALE } from "./sound";
+import { playCombo, playMark, playWin, WIN_BEATS, WIN_DURATION, WIN_FINALE } from "./sound";
+import { createVoiceListener } from "./voice";
 import {
   buildCard,
   cardKey,
-  findWin,
+  completedLineCells,
+  completeLines,
+  cornerIndices,
   freeIndex,
   getCustomWords,
   isPackId,
+  lineLabel,
   loadMarks,
+  oneAwayCells,
   randomSeed,
   saveMarks,
   setCustomWords,
@@ -60,7 +65,7 @@ function required<T extends Element>(selector: string): T {
   return el;
 }
 
-const card = required<HTMLElement>("#card");
+const cardEl = required<HTMLElement>("#card");
 const grid = required<HTMLDivElement>("#grid");
 const toast = required<HTMLParagraphElement>("#toast");
 const titleEl = required<HTMLHeadingElement>("#title");
@@ -68,6 +73,7 @@ const packSelect = required<HTMLSelectElement>("#pack");
 const sizeSelect = required<HTMLSelectElement>("#size");
 const hint = required<HTMLParagraphElement>("#hint");
 const muteBtn = required<HTMLButtonElement>("#mute");
+const meetingBtn = required<HTMLButtonElement>("#meeting");
 const wordsDialog = required<HTMLDialogElement>("#words-dialog");
 const wordsForm = required<HTMLFormElement>("#words-form");
 const wordsArea = required<HTMLTextAreaElement>("#words-area");
@@ -75,8 +81,35 @@ const wordsArea = required<HTMLTextAreaElement>("#words-area");
 /* ---------- state ---------- */
 let cfg: CardConfig = initialConfig();
 let marked = loadMarks(cfg);
-let hasWon = false;
 let muted = safeGet("bingo:muted") === "1";
+let hotCells = new Set<number>();
+let currentCells: readonly string[] = [];
+let currentFree = -1;
+let toastTimer: ReturnType<typeof setTimeout> | undefined;
+let showTimer: ReturnType<typeof setTimeout> | undefined;
+
+// Progress trackers so we only celebrate newly-reached milestones.
+let lineCount = 0;
+let cornersDone = false;
+let blackoutDone = false;
+
+// While a fanfare is still ringing, extra lines layer an ascending accent
+// instead of re-triggering the whole fanfare.
+let comboStep = 0;
+let fanfareBusyUntil = 0;
+const now = (): number => (globalThis.performance?.now() ?? 0);
+
+function markFanfarePlaying(): void {
+  fanfareBusyUntil = now() + WIN_DURATION * 1000;
+}
+
+function syncProgress(): void {
+  lineCount = completeLines(marked, cfg.size).length;
+  cornersDone = cornerIndices(cfg.size).every((i) => marked.has(i));
+  blackoutDone = marked.size >= cfg.size * cfg.size;
+  comboStep = 0;
+  fanfareBusyUntil = 0;
+}
 
 function initialConfig(): CardConfig {
   const params = new URLSearchParams(location.search);
@@ -105,19 +138,21 @@ function readPrefs(): Prefs {
 
 /* ---------- rendering ---------- */
 function render(): void {
-  hasWon = false;
+  clearTimeout(toastTimer);
   toast.classList.remove("show");
   titleEl.textContent = "…";
 
-  const card = buildCard(cfg, DECO_COUNTS);
-  titleEl.textContent = card.title;
+  const built = buildCard(cfg, DECO_COUNTS);
+  titleEl.textContent = built.title;
+  currentCells = built.cells;
+  currentFree = built.free;
 
   grid.style.setProperty("--size", String(cfg.size));
   grid.classList.toggle("grid--lg", cfg.size >= 5);
   grid.innerHTML = "";
 
-  card.cells.forEach((word, i) => {
-    const isFree = i === card.free;
+  built.cells.forEach((word, i) => {
+    const isFree = i === built.free;
     const cell = document.createElement("button");
     cell.type = "button";
     cell.className = "cell" + (isFree ? " cell--free" : "");
@@ -125,7 +160,7 @@ function render(): void {
     cell.setAttribute("aria-pressed", String(marked.has(i)));
     if (marked.has(i)) cell.classList.add("marked");
 
-    const d = card.decos[i]!;
+    const d = built.decos[i]!;
     const deco = DECOS[d.shape]!(PALETTE[d.color]!);
     const pos = CORNERS[d.corner]!;
     const translate = pos.left === "50%" ? " translateX(-50%)" : "";
@@ -140,53 +175,127 @@ function render(): void {
         <line x1="86" y1="18" x2="14" y2="82" />
       </svg>`;
 
-    if (!isFree) cell.addEventListener("click", () => toggle(cell, i));
+    if (!isFree) cell.addEventListener("click", () => toggleCell(i));
     grid.appendChild(cell);
   });
 
-  // A FREE center counts as already marked — it can complete a line on its own.
-  checkWin(false);
+  // Restore silently — reflect any already-won lines without replaying the show.
+  syncProgress();
+  refreshWinHighlight();
+  refreshHot();
   syncControls();
+}
+
+/* ---------- marking ---------- */
+function dismissToast(): void {
+  clearTimeout(toastTimer);
+  clearTimeout(showTimer);
+  toast.classList.remove("show");
+}
+
+function toggleCell(i: number): void {
+  // A manual tap clears any lingering celebration banner right away.
+  dismissToast();
+  setMarked(i, !marked.has(i));
+}
+
+function setMarked(i: number, on: boolean): void {
+  if (on === marked.has(i)) return;
+  const cell = grid.querySelector<HTMLElement>(`.cell[data-index="${i}"]`);
+  if (on) {
+    marked.add(i);
+    cell?.classList.add("marked");
+    if (!muted) playMark();
+    haptic(15);
+  } else {
+    marked.delete(i);
+    cell?.classList.remove("marked");
+  }
+  cell?.setAttribute("aria-pressed", String(on));
+  saveMarks(cfg, marked);
+  afterChange();
+}
+
+function afterChange(): void {
+  refreshWinHighlight();
+  refreshHot();
+  checkGoals();
+}
+
+function haptic(ms: number): void {
+  try {
+    navigator.vibrate?.(ms);
+  } catch {
+    /* no vibration API */
+  }
+}
+
+/* ---------- goals ---------- */
+// Fire on every newly-completed line (BINGO -> DOUBLE -> ...), plus the two
+// special goals. Lines chain as an ascending combo; corners/blackout get the
+// full fanfare payoff.
+function checkGoals(): void {
+  const lines = completeLines(marked, cfg.size).length;
+  const corners = cornerIndices(cfg.size).every((i) => marked.has(i));
+  const blackout = marked.size >= cfg.size * cfg.size;
+
+  const gotLine = lines > lineCount;
+  const gotCorners = corners && !cornersDone;
+  const gotBlackout = blackout && !blackoutDone;
+
+  lineCount = lines;
+  cornersDone = corners;
+  blackoutDone = blackout;
+
+  if (gotBlackout) {
+    comboStep = 0;
+    markFanfarePlaying();
+    celebrateBig("BLACKOUT!", allCells(), 3600);
+  } else if (gotCorners) {
+    comboStep = 0;
+    markFanfarePlaying();
+    celebrateBig("FOUR CORNERS!", cornerIndices(cfg.size), 2000);
+  } else if (gotLine) {
+    const label = lineLabel(lines);
+    const cells = completedLineCells(marked, cfg.size);
+    if (now() < fanfareBusyUntil) {
+      // A fanfare is already ringing — layer a quick ascending accent.
+      comboStep += 1;
+      celebrateLine(label, cells, comboStep);
+    } else {
+      // Nothing playing — give it the full satisfying fanfare.
+      comboStep = 0;
+      markFanfarePlaying();
+      celebrateBig(label, cells, 1600);
+    }
+  }
+}
+
+function allCells(): number[] {
+  return Array.from({ length: cfg.size * cfg.size }, (_, i) => i);
+}
+
+function refreshWinHighlight(): void {
+  const winners = new Set<number>();
+  for (const line of completeLines(marked, cfg.size)) for (const i of line) winners.add(i);
+  grid.querySelectorAll<HTMLElement>(".cell").forEach((el) => {
+    el.classList.toggle("win", winners.has(Number(el.dataset.index)));
+  });
+}
+
+function refreshHot(): void {
+  hotCells = oneAwayCells(marked, cfg.size);
+  grid.querySelectorAll<HTMLElement>(".cell").forEach((el) => {
+    el.classList.toggle("cell--hot", hotCells.has(Number(el.dataset.index)));
+  });
   updateHint();
 }
 
-function toggle(cell: HTMLButtonElement, i: number): void {
-  if (hasWon) return;
-  if (marked.has(i)) {
-    marked.delete(i);
-    cell.classList.remove("marked");
-  } else {
-    marked.add(i);
-    cell.classList.add("marked");
-  }
-  cell.setAttribute("aria-pressed", String(marked.has(i)));
-  saveMarks(cfg, marked);
-  checkWin(true);
-}
-
-function checkWin(withCelebration: boolean): void {
-  const line = findWin(marked, cfg.size);
-  if (!line) return;
-
-  hasWon = true;
-  for (const idx of line) {
-    grid.querySelector<HTMLButtonElement>(`.cell[data-index="${idx}"]`)?.classList.add("win");
-  }
-
-  if (withCelebration) {
-    celebrate(line);
-  } else {
-    // Restored win (e.g. reload): show the result without replaying the show.
-    toast.classList.add("show");
-  }
-}
-
-/* ---------- win celebration (audio + visuals synced) ---------- */
+/* ---------- celebration (audio + visuals synced) ---------- */
 function prefersReducedMotion(): boolean {
   return Boolean(globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
 }
 
-// Give the winning squares a quick bounce, re-triggerable on every beat.
 function pulseCells(cells: readonly number[]): void {
   if (prefersReducedMotion()) return;
   for (const idx of cells) {
@@ -197,18 +306,39 @@ function pulseCells(cells: readonly number[]): void {
   }
 }
 
-// Choreograph fireworks + toast to the jingle's beats (WIN_BEATS / WIN_FINALE).
-function celebrate(cells: readonly number[]): void {
-  if (!muted) playWin();
+function showToastFor(ms: number): void {
+  clearTimeout(showTimer);
+  clearTimeout(toastTimer);
+  toast.classList.add("show");
+  toastTimer = setTimeout(() => toast.classList.remove("show"), ms);
+}
 
-  const reduce = prefersReducedMotion();
-  if (reduce) {
-    toast.classList.add("show");
+// A single completed line: instant snappy banner + combo stab + one small burst.
+// Reuses `step` so a fast streak reads as one rising chain rather than a pile-up.
+function celebrateLine(label: string, cells: readonly number[], step: number): void {
+  toast.textContent = label;
+  if (!muted) playCombo(step);
+  showToastFor(1400);
+  if (prefersReducedMotion()) return;
+
+  pulseCells(cells);
+  const r = cardEl.getBoundingClientRect();
+  firework(r.left + r.width / 2, r.top + r.height * 0.32, 26 + step * 8, 7);
+}
+
+// Corners / blackout: full fanfare choreographed to the jingle's beats.
+function celebrateBig(label: string, cells: readonly number[], holdMs: number): void {
+  toast.textContent = label;
+  if (!muted) playWin();
+  clearTimeout(toastTimer);
+  clearTimeout(showTimer);
+
+  if (prefersReducedMotion()) {
+    showToastFor(holdMs);
     return;
   }
 
-  const r = card.getBoundingClientRect();
-  // A small burst near a card corner on each climbing stab.
+  const r = cardEl.getBoundingClientRect();
   const spots: Array<[number, number]> = [
     [r.left + r.width * 0.22, r.top + r.height * 0.8],
     [r.right - r.width * 0.22, r.top + r.height * 0.8],
@@ -223,12 +353,39 @@ function celebrate(cells: readonly number[]): void {
     }, t * 1000);
   });
 
-  // Finale: toast slams in, winning line pulses, full barrage.
-  setTimeout(() => {
+  // Banner slams in on the finale beat, then holds.
+  showTimer = setTimeout(() => {
     toast.classList.add("show");
     pulseCells(cells);
     finaleFireworks();
   }, WIN_FINALE * 1000);
+  toastTimer = setTimeout(() => toast.classList.remove("show"), WIN_FINALE * 1000 + holdMs);
+}
+
+/* ---------- Meeting Mode (voice) ---------- */
+const voice = createVoiceListener({
+  onTranscript: autoMark,
+  onState: (listening) => {
+    meetingBtn.classList.toggle("listening", listening);
+    meetingBtn.setAttribute("aria-pressed", String(listening));
+    meetingBtn.textContent = listening ? "🔴 Listening…" : "🎙️ Meeting Mode";
+    if (listening) flashHint("Meeting Mode on — say the words, I'll cross them off.");
+  },
+  onError: (e) =>
+    flashHint(e === "not-allowed" ? "Mic blocked — allow microphone access." : `Voice error: ${e}`),
+});
+
+function normalize(s: string): string {
+  return " " + s.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim() + " ";
+}
+
+// Cross off any unmarked square whose phrase appears in the latest transcript.
+function autoMark(text: string): void {
+  const hay = normalize(text);
+  for (let i = 0; i < currentCells.length; i++) {
+    if (i === currentFree || marked.has(i)) continue;
+    if (hay.includes(normalize(currentCells[i]!))) setMarked(i, true);
+  }
 }
 
 /* ---------- card lifecycle ---------- */
@@ -275,16 +432,23 @@ function flashHint(msg: string): void {
   clearTimeout(hintTimer);
   hint.textContent = msg;
   hint.classList.add("hint--flash");
-  hintTimer = setTimeout(() => hint.classList.remove("hint--flash"), 1600);
+  hintTimer = setTimeout(() => {
+    hint.classList.remove("hint--flash");
+    updateHint();
+  }, 2200);
 }
 
 function updateHint(): void {
   if (hint.classList.contains("hint--flash")) return;
+  hint.textContent = currentHintText();
+}
+
+function currentHintText(): string {
+  if (hotCells.size > 0) return "🔥 ONE AWAY!";
   if (cfg.pack === "custom" && getCustomWords().length === 0) {
-    hint.textContent = "Custom pack is empty — hit Edit Words to add your own.";
-  } else {
-    hint.textContent = "Same link, same card — share it with the squad.";
+    return "Custom pack is empty — hit Edit Words to add your own.";
   }
+  return "Same link, same card — share it with the squad.";
 }
 
 async function share(): Promise<void> {
@@ -351,6 +515,17 @@ muteBtn.addEventListener("click", () => {
   safeSet("bingo:muted", muted ? "1" : "0");
   syncControls();
 });
+
+if (!voice.supported) {
+  meetingBtn.disabled = true;
+  meetingBtn.title = "Meeting Mode needs Chrome or Edge";
+  meetingBtn.textContent = "🎙️ Meeting Mode (Chrome)";
+} else {
+  meetingBtn.addEventListener("click", () => {
+    if (voice.listening()) voice.stop();
+    else voice.start();
+  });
+}
 
 packSelect.addEventListener("change", () => {
   const pack: PackId = isPackId(packSelect.value) ? packSelect.value : "standup";

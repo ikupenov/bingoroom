@@ -224,6 +224,44 @@ export function findWin(marked: ReadonlySet<number>, size: number): number[] | n
   return winLines(size).find((line) => line.every((i) => marked.has(i))) ?? null;
 }
 
+/* ---------- lines, corners, one-away ---------- */
+export function completeLines(marked: ReadonlySet<number>, size: number): number[][] {
+  return winLines(size).filter((line) => line.every((i) => marked.has(i)));
+}
+
+/** Union of all cells belonging to a completed line. */
+export function completedLineCells(marked: ReadonlySet<number>, size: number): number[] {
+  const cells = new Set<number>();
+  for (const line of completeLines(marked, size)) for (const i of line) cells.add(i);
+  return [...cells];
+}
+
+export function cornerIndices(size: number): number[] {
+  const last = size - 1;
+  return [0, last, size * last, size * size - 1];
+}
+
+/** Label for the Nth simultaneous / cumulative completed line. */
+export function lineLabel(count: number): string {
+  const names = ["BINGO!", "DOUBLE BINGO!", "TRIPLE BINGO!", "QUAD BINGO!"];
+  return names[count - 1] ?? `${count}× BINGO!`;
+}
+
+/** Unmarked cells that would each complete a line (you're "one away"). */
+export function oneAwayCells(marked: ReadonlySet<number>, size: number): Set<number> {
+  const hot = new Set<number>();
+  for (const line of winLines(size)) {
+    let missing = -1;
+    let count = 0;
+    for (const i of line) {
+      if (marked.has(i)) count++;
+      else missing = i;
+    }
+    if (count === size - 1 && missing >= 0) hot.add(missing);
+  }
+  return hot;
+}
+
 /* ---------- persistence ---------- */
 export function cardKey(cfg: CardConfig): string {
   return `${cfg.pack}:${cfg.size}:${cfg.seed}`;

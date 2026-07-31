@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   buildCard,
+  completedLineCells,
+  completeLines,
+  cornerIndices,
   findWin,
   freeIndex,
+  lineLabel,
+  oneAwayCells,
   PACK_TITLES,
   poolFor,
   winLines,
@@ -103,5 +108,45 @@ describe("poolFor", () => {
     for (const pack of ["standup", "sales", "allhands"] as const) {
       expect(poolFor(pack).length).toBeGreaterThanOrEqual(25);
     }
+  });
+});
+
+describe("lines & goals", () => {
+  it("cornerIndices are the four board corners", () => {
+    expect(cornerIndices(3)).toEqual([0, 2, 6, 8]);
+    expect(cornerIndices(5)).toEqual([0, 4, 20, 24]);
+  });
+
+  it("completeLines counts each finished line (fixes 3rd-line-on-5x5)", () => {
+    expect(completeLines(new Set([0, 1, 2]), 3)).toHaveLength(1);
+    // top row + left column = two lines
+    expect(completeLines(new Set([0, 1, 2, 3, 6]), 3)).toHaveLength(2);
+    // top row of a 5x5
+    expect(completeLines(new Set([0, 1, 2, 3, 4]), 5)).toHaveLength(1);
+  });
+
+  it("completedLineCells is the union of finished lines", () => {
+    expect(completedLineCells(new Set([3, 4, 5]), 3).sort((a, b) => a - b)).toEqual([3, 4, 5]);
+    expect(completedLineCells(new Set([0]), 3)).toEqual([]);
+  });
+
+  it("lineLabel escalates with count", () => {
+    expect(lineLabel(1)).toBe("BINGO!");
+    expect(lineLabel(2)).toBe("DOUBLE BINGO!");
+    expect(lineLabel(3)).toBe("TRIPLE BINGO!");
+    expect(lineLabel(6)).toBe("6× BINGO!");
+  });
+});
+
+describe("oneAwayCells", () => {
+  it("finds the single square that completes a line", () => {
+    // top row missing index 2
+    expect(oneAwayCells(new Set([0, 1]), 3)).toEqual(new Set([2]));
+  });
+  it("is empty when no line is one away", () => {
+    expect(oneAwayCells(new Set([0]), 3).size).toBe(0);
+  });
+  it("does not flag an already-complete line", () => {
+    expect(oneAwayCells(new Set([0, 1, 2]), 3).has(2)).toBe(false);
   });
 });
