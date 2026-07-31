@@ -3,6 +3,7 @@ import {
   buildCard,
   findWin,
   freeIndex,
+  PACK_TITLES,
   poolFor,
   winLines,
   type CardConfig,
@@ -70,6 +71,12 @@ describe("buildCard", () => {
     const a = buildCard(cfg, COUNTS);
     const b = buildCard({ ...cfg, seed: "different" }, COUNTS);
     expect(a.cells).not.toEqual(b.cells);
+  });
+
+  it("titles the card after the pack, not the seed", () => {
+    expect(buildCard({ ...cfg, pack: "sales" }, COUNTS).title).toBe(PACK_TITLES.sales);
+    // Same pack, different seed -> same title.
+    expect(buildCard({ ...cfg, pack: "sales", seed: "zzz" }, COUNTS).title).toBe(PACK_TITLES.sales);
   });
 
   it("fills every cell and marks a FREE center on 5x5", () => {
