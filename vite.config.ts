@@ -10,6 +10,11 @@ export default defineConfig(({ command }) => ({
     VitePWA({
       registerType: "autoUpdate",
       includeAssets: ["favicon.svg", "icon-192.png", "icon-512.png"],
+      workbox: {
+        // The Whisper worker + ONNX runtime WASM are large and only needed when
+        // Meeting Mode is used — fetch them on demand instead of precaching.
+        globIgnores: ["**/*.wasm", "**/whisper-worker-*.js"],
+      },
       manifest: {
         name: "Squad Bingo",
         short_name: "Bingo",

@@ -329,6 +329,12 @@ body {
 /* ---------- Meeting Mode ---------- */
 .meeting-bar { display: flex; justify-content: center; }
 .btn--mic { background: var(--purple); color: var(--yellow); font-size: 17px; padding: 13px 28px; }
+.btn--mic.loading {
+  /* fill grows left-to-right with the download percentage (--p) */
+  background: linear-gradient(to right, var(--teal) var(--p, 0%), var(--cream) var(--p, 0%));
+  color: var(--ink);
+  cursor: progress;
+}
 .btn--mic.listening {
   background: var(--pink);
   color: var(--cream);
