@@ -2,7 +2,8 @@
  * Squad Bingo — DOM wiring, rendering, sound, sharing.
  * ------------------------------------------------------------------------- */
 import "./style.css";
-import { burstConfetti } from "./confetti";
+import { finaleFireworks, firework } from "./fireworks";
+import { playWin, WIN_BEATS, WIN_FINALE } from "./sound";
 import {
   buildCard,
   cardKey,
@@ -59,6 +60,7 @@ function required<T extends Element>(selector: string): T {
   return el;
 }
 
+const card = required<HTMLElement>("#card");
 const grid = required<HTMLDivElement>("#grid");
 const toast = required<HTMLParagraphElement>("#toast");
 const titleEl = required<HTMLHeadingElement>("#title");
@@ -162,7 +164,7 @@ function toggle(cell: HTMLButtonElement, i: number): void {
   checkWin(true);
 }
 
-function checkWin(celebrate: boolean): void {
+function checkWin(withCelebration: boolean): void {
   const line = findWin(marked, cfg.size);
   if (!line) return;
 
@@ -170,38 +172,63 @@ function checkWin(celebrate: boolean): void {
   for (const idx of line) {
     grid.querySelector<HTMLButtonElement>(`.cell[data-index="${idx}"]`)?.classList.add("win");
   }
-  toast.classList.add("show");
-  if (celebrate) {
-    burstConfetti();
-    playWinChime();
+
+  if (withCelebration) {
+    celebrate(line);
+  } else {
+    // Restored win (e.g. reload): show the result without replaying the show.
+    toast.classList.add("show");
   }
 }
 
-/* ---------- sound ---------- */
-function playWinChime(): void {
-  if (muted) return;
-  try {
-    const Ctx = globalThis.AudioContext ?? (globalThis as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-    if (!Ctx) return;
-    const ac = new Ctx();
-    const notes = [523.25, 659.25, 783.99, 1046.5]; // C5 E5 G5 C6
-    notes.forEach((freq, i) => {
-      const osc = ac.createOscillator();
-      const gain = ac.createGain();
-      osc.type = "triangle";
-      osc.frequency.value = freq;
-      const t = ac.currentTime + i * 0.11;
-      gain.gain.setValueAtTime(0.0001, t);
-      gain.gain.exponentialRampToValueAtTime(0.22, t + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.32);
-      osc.connect(gain).connect(ac.destination);
-      osc.start(t);
-      osc.stop(t + 0.34);
-    });
-    setTimeout(() => void ac.close(), 900);
-  } catch {
-    /* audio not available */
+/* ---------- win celebration (audio + visuals synced) ---------- */
+function prefersReducedMotion(): boolean {
+  return Boolean(globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
+}
+
+// Give the winning squares a quick bounce, re-triggerable on every beat.
+function pulseCells(cells: readonly number[]): void {
+  if (prefersReducedMotion()) return;
+  for (const idx of cells) {
+    grid.querySelector<HTMLElement>(`.cell[data-index="${idx}"]`)?.animate(
+      [{ transform: "scale(1)" }, { transform: "scale(1.09)" }, { transform: "scale(1)" }],
+      { duration: 200, easing: "ease-out" },
+    );
   }
+}
+
+// Choreograph fireworks + toast to the jingle's beats (WIN_BEATS / WIN_FINALE).
+function celebrate(cells: readonly number[]): void {
+  if (!muted) playWin();
+
+  const reduce = prefersReducedMotion();
+  if (reduce) {
+    toast.classList.add("show");
+    return;
+  }
+
+  const r = card.getBoundingClientRect();
+  // A small burst near a card corner on each climbing stab.
+  const spots: Array<[number, number]> = [
+    [r.left + r.width * 0.22, r.top + r.height * 0.8],
+    [r.right - r.width * 0.22, r.top + r.height * 0.8],
+    [r.left + r.width * 0.5, r.top + r.height * 0.16],
+  ];
+
+  WIN_BEATS.forEach((t, i) => {
+    setTimeout(() => {
+      pulseCells(cells);
+      const spot = spots[i];
+      if (spot) firework(spot[0], spot[1], 45, 7);
+    }, t * 1000);
+  });
+
+  // Finale: toast slams in, winning line pulses, full barrage.
+  setTimeout(() => {
+    toast.classList.add("show");
+    pulseCells(cells);
+    finaleFireworks();
+  }, WIN_FINALE * 1000);
 }
 
 /* ---------- card lifecycle ---------- */
