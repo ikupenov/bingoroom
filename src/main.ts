@@ -363,16 +363,33 @@ function celebrateBig(label: string, cells: readonly number[], holdMs: number): 
 }
 
 /* ---------- Meeting Mode (voice) ---------- */
+function disableMeeting(text: string): void {
+  meetingBtn.disabled = true;
+  meetingBtn.classList.remove("listening");
+  meetingBtn.textContent = text;
+}
+
 const voice = createVoiceListener({
   onTranscript: autoMark,
   onState: (listening) => {
+    if (meetingBtn.disabled) return; // service already ruled out in this browser
     meetingBtn.classList.toggle("listening", listening);
     meetingBtn.setAttribute("aria-pressed", String(listening));
     meetingBtn.textContent = listening ? "🔴 Listening…" : "🎙️ Meeting Mode";
     if (listening) flashHint("Meeting Mode on — say the words, I'll cross them off.");
   },
-  onError: (e) =>
-    flashHint(e === "not-allowed" ? "Mic blocked — allow microphone access." : `Voice error: ${e}`),
+  onError: (e) => {
+    if (e === "not-allowed" || e === "audio-capture") {
+      flashHint("Mic blocked — allow microphone access in your browser settings.");
+    } else if (e === "network" || e === "service-not-allowed" || e === "language-not-supported") {
+      // Chromium forks (Dia, Arc, Brave) expose the API but can't reach Google's
+      // speech service. Rule the feature out for this browser.
+      disableMeeting("🎙️ Meeting Mode — use Chrome");
+      flashHint("Voice needs Chrome, Edge, or Safari — this browser can't reach the speech service.");
+    } else {
+      flashHint(`Voice unavailable (${e}).`);
+    }
+  },
 });
 
 function normalize(s: string): string {
