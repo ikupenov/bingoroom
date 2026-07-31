@@ -22,7 +22,10 @@ export interface MeetingVoice {
 }
 
 const TARGET_RATE = 16000;
-const WINDOW_SEC = 3;
+const WINDOW_SEC = 3; // length of audio sent per transcription
+const HOP_MS = 1000; // how often we transcribe -> heavy overlap, so no word falls between windows
+const MAX_BUFFER_SEC = 6; // rolling audio kept in memory
+const SILENCE_RMS = 0.006; // skip near-silent windows (saves the worker for real speech)
 
 interface WorkerMessage {
   type: "progress" | "ready" | "result" | "error";
@@ -44,7 +47,8 @@ export function createMeetingVoice(cb: VoiceCallbacks): MeetingVoice {
   let audioCtx: AudioContext | null = null;
   let source: MediaStreamAudioSourceNode | null = null;
   let processor: ScriptProcessorNode | null = null;
-  let chunks: Float32Array[] = [];
+  let hopTimer: ReturnType<typeof setInterval> | undefined;
+  let chunks: Float32Array[] = []; // rolling buffer of the last MAX_BUFFER_SEC
   let chunkLen = 0;
   let busy = false;
 
@@ -96,7 +100,7 @@ export function createMeetingVoice(cb: VoiceCallbacks): MeetingVoice {
     });
   }
 
-  function flatten(): Float32Array {
+  function flattenAll(): Float32Array {
     const out = new Float32Array(chunkLen);
     let off = 0;
     for (const c of chunks) {
@@ -104,6 +108,17 @@ export function createMeetingVoice(cb: VoiceCallbacks): MeetingVoice {
       off += c.length;
     }
     return out;
+  }
+
+  function lastWindow(samples: number): Float32Array {
+    const all = flattenAll();
+    return all.length <= samples ? all : all.slice(all.length - samples);
+  }
+
+  function rms(data: Float32Array): number {
+    let sum = 0;
+    for (let i = 0; i < data.length; i++) sum += data[i]! * data[i]!;
+    return Math.sqrt(sum / Math.max(1, data.length));
   }
 
   function resample(data: Float32Array, from: number): Float32Array {
@@ -138,27 +153,32 @@ export function createMeetingVoice(cb: VoiceCallbacks): MeetingVoice {
 
     audioCtx = new AudioContext({ sampleRate: TARGET_RATE });
     const rate = audioCtx.sampleRate;
-    const windowSamples = TARGET_RATE * WINDOW_SEC;
+    const windowSamples = rate * WINDOW_SEC;
+    const maxSamples = rate * MAX_BUFFER_SEC;
     source = audioCtx.createMediaStreamSource(stream);
     processor = audioCtx.createScriptProcessor(4096, 1, 1);
     chunks = [];
     chunkLen = 0;
 
+    // Keep a rolling buffer of recent audio; never throw samples away here.
     processor.onaudioprocess = (e: AudioProcessingEvent) => {
-      const input = e.inputBuffer.getChannelData(0);
-      chunks.push(new Float32Array(input));
-      chunkLen += input.length;
-      if (chunkLen < windowSamples) return;
-
-      const audio = resample(flatten(), rate);
-      chunks = [];
-      chunkLen = 0;
-      // Drop windows while the worker is busy so latency stays bounded.
-      if (!busy && worker) {
-        busy = true;
-        worker.postMessage({ type: "transcribe", audio }, [audio.buffer]);
+      chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+      chunkLen += chunks[chunks.length - 1]!.length;
+      while (chunkLen > maxSamples && chunks.length > 1) {
+        chunkLen -= chunks.shift()!.length;
       }
     };
+
+    // Every HOP, transcribe the most recent WINDOW. Overlapping windows mean a
+    // word lands inside several transcriptions, so boundaries don't drop it.
+    hopTimer = setInterval(() => {
+      if (busy || !worker || chunkLen < windowSamples) return;
+      const win = lastWindow(windowSamples);
+      if (rms(win) < SILENCE_RMS) return;
+      const audio = resample(win, rate);
+      busy = true;
+      worker.postMessage({ type: "transcribe", audio }, [audio.buffer]);
+    }, HOP_MS);
 
     source.connect(processor);
     processor.connect(audioCtx.destination);
@@ -168,6 +188,8 @@ export function createMeetingVoice(cb: VoiceCallbacks): MeetingVoice {
 
   function stopListening(): void {
     listeningNow = false;
+    clearInterval(hopTimer);
+    hopTimer = undefined;
     try {
       processor?.disconnect();
       source?.disconnect();

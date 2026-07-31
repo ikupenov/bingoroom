@@ -20,6 +20,7 @@ import {
   randomSeed,
   saveMarks,
   setCustomWords,
+  transcriptMatches,
   type CardConfig,
   type DecoCounts,
   type PackId,
@@ -396,16 +397,11 @@ const voice = createMeetingVoice({
   onTranscript: autoMark,
 });
 
-function normalize(s: string): string {
-  return " " + s.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim() + " ";
-}
-
 // Cross off any unmarked square whose phrase appears in the latest transcript.
 function autoMark(text: string): void {
-  const hay = normalize(text);
   for (let i = 0; i < currentCells.length; i++) {
     if (i === currentFree || marked.has(i)) continue;
-    if (hay.includes(normalize(currentCells[i]!))) setMarked(i, true);
+    if (transcriptMatches(text, currentCells[i]!)) setMarked(i, true);
   }
 }
 
