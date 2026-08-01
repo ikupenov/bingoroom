@@ -4,7 +4,7 @@
 import "./style.css";
 import { finaleFireworks, firework } from "./fireworks";
 import { playCombo, playMark, playWin, WIN_BEATS, WIN_DURATION, WIN_FINALE } from "./sound";
-import { createVoiceListener } from "./voice";
+import { createMeetingVoice } from "./voice";
 import {
   buildCard,
   cardKey,
@@ -20,6 +20,7 @@ import {
   randomSeed,
   saveMarks,
   setCustomWords,
+  transcriptMatches,
   type CardConfig,
   type DecoCounts,
   type PackId,
@@ -363,45 +364,44 @@ function celebrateBig(label: string, cells: readonly number[], holdMs: number): 
 }
 
 /* ---------- Meeting Mode (voice) ---------- */
-function disableMeeting(text: string): void {
-  meetingBtn.disabled = true;
-  meetingBtn.classList.remove("listening");
-  meetingBtn.textContent = text;
-}
+const MIC_IDLE = "🎙️ Meeting Mode";
 
-const voice = createVoiceListener({
-  onTranscript: autoMark,
-  onState: (listening) => {
-    if (meetingBtn.disabled) return; // service already ruled out in this browser
-    meetingBtn.classList.toggle("listening", listening);
-    meetingBtn.setAttribute("aria-pressed", String(listening));
-    meetingBtn.textContent = listening ? "🔴 Listening…" : "🎙️ Meeting Mode";
-    if (listening) flashHint("Meeting Mode on — say the words, I'll cross them off.");
-  },
-  onError: (e) => {
-    if (e === "not-allowed" || e === "audio-capture") {
-      flashHint("Mic blocked — allow microphone access in your browser settings.");
-    } else if (e === "network" || e === "service-not-allowed" || e === "language-not-supported") {
-      // Chromium forks (Dia, Arc, Brave) expose the API but can't reach Google's
-      // speech service. Rule the feature out for this browser.
-      disableMeeting("🎙️ Meeting Mode — use Chrome");
-      flashHint("Voice needs Chrome, Edge, or Safari — this browser can't reach the speech service.");
-    } else {
-      flashHint(`Voice unavailable (${e}).`);
+const voice = createMeetingVoice({
+  onLoadingChange: (loading) => {
+    meetingBtn.classList.toggle("loading", loading);
+    meetingBtn.disabled = loading; // block re-clicks mid-download
+    if (!loading) {
+      meetingBtn.style.removeProperty("--p");
+      if (!voice.listening()) meetingBtn.textContent = "🎤 Starting…";
     }
   },
+  onProgress: (pct) => {
+    if (!voice.loading()) return; // ignore stray late-arriving progress
+    meetingBtn.style.setProperty("--p", `${pct}%`);
+    meetingBtn.textContent = `⬇ Loading voice… ${pct}%`;
+  },
+  onListening: (on) => {
+    meetingBtn.classList.remove("loading");
+    meetingBtn.classList.toggle("listening", on);
+    meetingBtn.setAttribute("aria-pressed", String(on));
+    meetingBtn.textContent = on ? "🔴 Listening…" : MIC_IDLE;
+    if (on) flashHint("Meeting Mode on — say the words, I'll cross them off.");
+  },
+  onError: (code) => {
+    meetingBtn.classList.remove("loading");
+    meetingBtn.disabled = false;
+    meetingBtn.style.removeProperty("--p");
+    if (!voice.listening()) meetingBtn.textContent = MIC_IDLE;
+    flashHint(code === "mic-denied" ? "Mic blocked — allow microphone access." : `Voice error: ${code}`);
+  },
+  onTranscript: autoMark,
 });
-
-function normalize(s: string): string {
-  return " " + s.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim() + " ";
-}
 
 // Cross off any unmarked square whose phrase appears in the latest transcript.
 function autoMark(text: string): void {
-  const hay = normalize(text);
   for (let i = 0; i < currentCells.length; i++) {
     if (i === currentFree || marked.has(i)) continue;
-    if (hay.includes(normalize(currentCells[i]!))) setMarked(i, true);
+    if (transcriptMatches(text, currentCells[i]!)) setMarked(i, true);
   }
 }
 
@@ -465,7 +465,7 @@ function currentHintText(): string {
   if (cfg.pack === "custom" && getCustomWords().length === 0) {
     return "Custom pack is empty — hit Edit Words to add your own.";
   }
-  return "Same link, same card — share it with the squad.";
+  return "";
 }
 
 async function share(): Promise<void> {
@@ -533,16 +533,8 @@ muteBtn.addEventListener("click", () => {
   syncControls();
 });
 
-if (!voice.supported) {
-  meetingBtn.disabled = true;
-  meetingBtn.title = "Meeting Mode needs Chrome or Edge";
-  meetingBtn.textContent = "🎙️ Meeting Mode (Chrome)";
-} else {
-  meetingBtn.addEventListener("click", () => {
-    if (voice.listening()) voice.stop();
-    else voice.start();
-  });
-}
+meetingBtn.title = "First use downloads a small voice model (~40MB), then runs on-device";
+meetingBtn.addEventListener("click", () => voice.toggle());
 
 packSelect.addEventListener("change", () => {
   const pack: PackId = isPackId(packSelect.value) ? packSelect.value : "standup";

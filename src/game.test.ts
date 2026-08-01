@@ -10,6 +10,7 @@ import {
   oneAwayCells,
   PACK_TITLES,
   poolFor,
+  transcriptMatches,
   winLines,
   type CardConfig,
   type DecoCounts,
@@ -135,6 +136,31 @@ describe("lines & goals", () => {
     expect(lineLabel(2)).toBe("DOUBLE BINGO!");
     expect(lineLabel(3)).toBe("TRIPLE BINGO!");
     expect(lineLabel(6)).toBe("6× BINGO!");
+  });
+});
+
+describe("transcriptMatches", () => {
+  it("matches a phrase spoken in a sentence", () => {
+    expect(transcriptMatches("ok let's circle back on that", "CIRCLE BACK")).toBe(true);
+    expect(transcriptMatches("that's real synergy right there", "SYNERGY")).toBe(true);
+  });
+
+  it("tolerates plurals / trailing s", () => {
+    expect(transcriptMatches("we have a few blockers", "BLOCKER")).toBe(true);
+    expect(transcriptMatches("check the feature flags", "FEATURE FLAG")).toBe(true);
+  });
+
+  it("respects word boundaries (no false positives)", () => {
+    expect(transcriptMatches("relationship issues", "SHIP IT")).toBe(false);
+    expect(transcriptMatches("the mvps of the team", "MVP")).toBe(true); // mvps -> mvp
+  });
+
+  it("does not match when absent", () => {
+    expect(transcriptMatches("nothing relevant here", "MOONSHOT")).toBe(false);
+  });
+
+  it("handles punctuation and casing from the recognizer", () => {
+    expect(transcriptMatches("Let's ship it!", "SHIP IT")).toBe(true);
   });
 });
 

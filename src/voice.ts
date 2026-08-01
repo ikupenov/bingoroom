@@ -1,128 +1,272 @@
 /* ---------------------------------------------------------------------------
- * Meeting Mode: listen to the call via the Web Speech API and stream the
- * transcript out so the caller can auto-mark spoken buzzwords.
- * Chrome / Edge only; degrades to `supported: false` elsewhere.
+ * Meeting Mode — on-device speech, works in every browser (incl. Dia).
+ *
+ * The whisper model (~40MB) is downloaded lazily the first time the user turns
+ * Meeting Mode on, with progress reported for a UI bar. Audio is segmented by
+ * voice activity (accumulate while speaking, transcribe on a pause), resampled
+ * to 16kHz, and transcribed in a Web Worker; the text is streamed back so the
+ * caller can auto-mark spoken buzzwords.
  * ------------------------------------------------------------------------- */
 
-interface SRAlternative {
-  transcript: string;
-}
-interface SRResult {
-  0: SRAlternative;
-  isFinal: boolean;
-}
-interface SRResultList {
-  length: number;
-  [index: number]: SRResult;
-}
-interface SREvent {
-  resultIndex: number;
-  results: SRResultList;
-}
-interface SRErrorEvent {
-  error: string;
-}
-interface SRInstance {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  onresult: ((e: SREvent) => void) | null;
-  onerror: ((e: SRErrorEvent) => void) | null;
-  onend: (() => void) | null;
-  start(): void;
-  stop(): void;
-}
-type SRConstructor = new () => SRInstance;
-
-function getConstructor(): SRConstructor | undefined {
-  const g = globalThis as unknown as {
-    SpeechRecognition?: SRConstructor;
-    webkitSpeechRecognition?: SRConstructor;
-  };
-  return g.SpeechRecognition ?? g.webkitSpeechRecognition;
-}
-
-export interface VoiceListener {
-  supported: boolean;
-  listening(): boolean;
-  start(): void;
-  stop(): void;
-}
-
-export interface VoiceHandlers {
+export interface VoiceCallbacks {
+  onLoadingChange: (loading: boolean) => void;
+  onProgress: (pct: number) => void;
+  onListening: (on: boolean) => void;
   onTranscript: (text: string) => void;
-  onState: (listening: boolean) => void;
-  onError?: (error: string) => void;
+  onError: (code: string) => void;
 }
 
-export function createVoiceListener(handlers: VoiceHandlers): VoiceListener {
-  const SR = getConstructor();
-  if (!SR) {
-    return { supported: false, listening: () => false, start() {}, stop() {} };
+export interface MeetingVoice {
+  toggle: () => void;
+  listening: () => boolean;
+  loading: () => boolean;
+}
+
+const TARGET_RATE = 16000;
+// Voice-activity segmentation: accumulate while you speak, transcribe the whole
+// phrase when you pause. Whisper is far more accurate on complete utterances
+// than on arbitrary fixed-length slices.
+const SPEECH_ENTER_RMS = 0.006; // level that starts an utterance
+const SPEECH_EXIT_RMS = 0.0035; // below this counts as silence (hysteresis)
+const SILENCE_HANG_MS = 600; // trailing silence that ends an utterance
+const MIN_SEG_MS = 250; // ignore blips shorter than this
+const MAX_SEG_MS = 10000; // force a cut for long monologues
+const PREROLL_MS = 250; // audio kept before onset so the first word isn't clipped
+const FRAME_SIZE = 2048; // ~128ms at 16kHz -> fine-grained VAD
+
+interface WorkerMessage {
+  type: "progress" | "ready" | "result" | "error";
+  pct?: number;
+  text?: string;
+  error?: string;
+  device?: string;
+}
+
+export function createMeetingVoice(cb: VoiceCallbacks): MeetingVoice {
+  let worker: Worker | null = null;
+  let modelReady = false;
+  let loadingModel = false;
+  let listeningNow = false;
+  let readyResolve: (() => void) | null = null;
+  let readyReject: ((e: string) => void) | null = null;
+
+  // audio graph
+  let stream: MediaStream | null = null;
+  let audioCtx: AudioContext | null = null;
+  let source: MediaStreamAudioSourceNode | null = null;
+  let processor: ScriptProcessorNode | null = null;
+  let busy = false;
+  const queue: Float32Array[] = []; // utterances waiting for the worker
+
+  // VAD state
+  let speaking = false;
+  let seg: Float32Array[] = [];
+  let segLen = 0;
+  let silenceSamples = 0;
+  let preroll: Float32Array[] = [];
+  let prerollLen = 0;
+
+  function ensureWorker(): void {
+    if (worker) return;
+    worker = new Worker(new URL("./whisper-worker.ts", import.meta.url), { type: "module" });
+    worker.onmessage = (e: MessageEvent<WorkerMessage>) => {
+      const m = e.data;
+      switch (m.type) {
+        case "progress":
+          cb.onProgress(m.pct ?? 0);
+          break;
+        case "ready":
+          modelReady = true;
+          loadingModel = false;
+          console.info(`[voice] Meeting Mode ready (${m.device ?? "?"})`);
+          cb.onLoadingChange(false);
+          readyResolve?.();
+          readyResolve = readyReject = null;
+          break;
+        case "result":
+          busy = false;
+          if (m.text && m.text.trim()) {
+            console.debug("[voice] heard:", JSON.stringify(m.text.trim()));
+            cb.onTranscript(m.text);
+          }
+          pump();
+          break;
+        case "error":
+          busy = false;
+          if (!modelReady) {
+            loadingModel = false;
+            cb.onLoadingChange(false);
+            readyReject?.(m.error ?? "load-failed");
+            readyResolve = readyReject = null;
+          }
+          cb.onError(m.error ?? "error");
+          pump();
+          break;
+      }
+    };
+    worker.onerror = () => cb.onError("worker-failed");
   }
 
-  let rec: SRInstance | null = null;
-  let active = false;
+  function ensureModel(): Promise<void> {
+    if (modelReady) return Promise.resolve();
+    ensureWorker();
+    loadingModel = true;
+    cb.onLoadingChange(true);
+    cb.onProgress(0);
+    worker!.postMessage({ type: "load" });
+    return new Promise<void>((resolve, reject) => {
+      readyResolve = resolve;
+      readyReject = reject;
+    });
+  }
 
-  const build = (): SRInstance => {
-    const r = new SR();
-    r.continuous = true;
-    r.interimResults = true;
-    r.lang = "en-US";
-    r.onresult = (e) => {
-      let text = "";
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        text += e.results[i]![0].transcript + " ";
-      }
-      handlers.onTranscript(text);
-    };
-    r.onerror = (e) => {
-      // "no-speech" / "aborted" are routine — let onend auto-restart.
-      if (e.error === "no-speech" || e.error === "aborted") return;
-      // Anything else (network, service-not-allowed, not-allowed, audio-capture)
-      // is fatal: stop the retry loop and report it.
-      active = false;
-      handlers.onError?.(e.error);
-    };
-    r.onend = () => {
-      // The engine stops itself after a pause; restart while Meeting Mode is on.
-      if (active) {
-        try {
-          r.start();
-        } catch {
-          active = false;
-          handlers.onState(false);
+  function flatten(parts: Float32Array[], length: number): Float32Array {
+    const out = new Float32Array(length);
+    let off = 0;
+    for (const c of parts) {
+      out.set(c, off);
+      off += c.length;
+    }
+    return out;
+  }
+
+  function rms(data: Float32Array): number {
+    let sum = 0;
+    for (let i = 0; i < data.length; i++) sum += data[i]! * data[i]!;
+    return Math.sqrt(sum / Math.max(1, data.length));
+  }
+
+  function resample(data: Float32Array, from: number): Float32Array {
+    if (from === TARGET_RATE) return data;
+    const ratio = from / TARGET_RATE;
+    const outLen = Math.round(data.length / ratio);
+    const out = new Float32Array(outLen);
+    for (let i = 0; i < outLen; i++) {
+      const idx = i * ratio;
+      const i0 = Math.floor(idx);
+      const i1 = Math.min(i0 + 1, data.length - 1);
+      const frac = idx - i0;
+      out[i] = data[i0]! * (1 - frac) + data[i1]! * frac;
+    }
+    return out;
+  }
+
+  // Send the next queued utterance if the worker is free.
+  function pump(): void {
+    if (busy || !worker || queue.length === 0) return;
+    const audio = queue.shift()!;
+    busy = true;
+    worker.postMessage({ type: "transcribe", audio }, [audio.buffer]);
+  }
+
+  function enqueue(utterance: Float32Array, rate: number): void {
+    const audio = resample(utterance, rate);
+    queue.push(audio);
+    while (queue.length > 3) queue.shift(); // bound backlog
+    pump();
+  }
+
+  function resetVad(): void {
+    speaking = false;
+    seg = [];
+    segLen = 0;
+    silenceSamples = 0;
+    preroll = [];
+    prerollLen = 0;
+  }
+
+  async function startListening(): Promise<void> {
+    try {
+      await ensureModel();
+    } catch {
+      return; // load error already reported
+    }
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+      });
+    } catch {
+      cb.onError("mic-denied");
+      return;
+    }
+
+    audioCtx = new AudioContext({ sampleRate: TARGET_RATE });
+    const rate = audioCtx.sampleRate;
+    const hangSamples = (SILENCE_HANG_MS / 1000) * rate;
+    const minSegSamples = (MIN_SEG_MS / 1000) * rate;
+    const maxSegSamples = (MAX_SEG_MS / 1000) * rate;
+    const prerollSamples = (PREROLL_MS / 1000) * rate;
+    source = audioCtx.createMediaStreamSource(stream);
+    processor = audioCtx.createScriptProcessor(FRAME_SIZE, 1, 1);
+    resetVad();
+
+    processor.onaudioprocess = (e: AudioProcessingEvent) => {
+      const frame = new Float32Array(e.inputBuffer.getChannelData(0));
+      const level = rms(frame);
+
+      if (!speaking) {
+        preroll.push(frame);
+        prerollLen += frame.length;
+        while (prerollLen > prerollSamples && preroll.length > 1) {
+          prerollLen -= preroll.shift()!.length;
         }
-      } else {
-        handlers.onState(false);
+        if (level >= SPEECH_ENTER_RMS) {
+          speaking = true;
+          seg = preroll.slice();
+          segLen = prerollLen;
+          preroll = [];
+          prerollLen = 0;
+          silenceSamples = 0;
+        }
+        return;
+      }
+
+      // Speaking: accumulate until a pause (or the hard cap).
+      seg.push(frame);
+      segLen += frame.length;
+      if (level >= SPEECH_EXIT_RMS) silenceSamples = 0;
+      else silenceSamples += frame.length;
+
+      if (silenceSamples >= hangSamples || segLen >= maxSegSamples) {
+        const utterance = flatten(seg, segLen);
+        const enough = segLen >= minSegSamples;
+        resetVad();
+        if (enough) enqueue(utterance, rate);
       }
     };
-    return r;
-  };
+
+    source.connect(processor);
+    processor.connect(audioCtx.destination);
+    listeningNow = true;
+    cb.onListening(true);
+  }
+
+  function stopListening(): void {
+    listeningNow = false;
+    try {
+      processor?.disconnect();
+      source?.disconnect();
+    } catch {
+      /* already gone */
+    }
+    processor = null;
+    source = null;
+    stream?.getTracks().forEach((t) => t.stop());
+    stream = null;
+    void audioCtx?.close().catch(() => {});
+    audioCtx = null;
+    queue.length = 0;
+    resetVad();
+    busy = false;
+    cb.onListening(false);
+  }
 
   return {
-    supported: true,
-    listening: () => active,
-    start() {
-      if (active) return;
-      active = true;
-      rec = build();
-      try {
-        rec.start();
-        handlers.onState(true);
-      } catch {
-        active = false;
-        handlers.onState(false);
-      }
+    toggle() {
+      if (listeningNow) stopListening();
+      else if (!loadingModel) void startListening();
     },
-    stop() {
-      active = false;
-      try {
-        rec?.stop();
-      } catch {
-        /* already stopped */
-      }
-      handlers.onState(false);
-    },
+    listening: () => listeningNow,
+    loading: () => loadingModel,
   };
 }

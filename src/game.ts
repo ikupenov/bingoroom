@@ -297,3 +297,23 @@ export function randomSeed(): string {
 export function isPackId(value: string): value is PackId {
   return value === "standup" || value === "sales" || value === "allhands" || value === "custom";
 }
+
+/* ---------- Meeting Mode transcript matching ---------- */
+// Lowercase, strip punctuation, light-stem trailing "s" so plural/verb forms
+// match ("blockers" -> "blocker"). Space-wrapped for word-boundary checks.
+export function keyify(s: string): string {
+  const tokens = s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((w) => (w.length > 3 && w.endsWith("s") ? w.slice(0, -1) : w));
+  return ` ${tokens.join(" ")} `;
+}
+
+/** True if `phrase` appears (word-boundary, plural-tolerant) in `transcript`. */
+export function transcriptMatches(transcript: string, phrase: string): boolean {
+  const p = keyify(phrase);
+  return p.trim().length > 0 && keyify(transcript).includes(p);
+}
